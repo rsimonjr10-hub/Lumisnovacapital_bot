@@ -234,6 +234,11 @@ Your personal market intelligence system.
 /insider [TICKER] — Insider activity
 /risk [TICKER] — Risk check
 /compounding — Wealth math
+/sector [SECTOR] — Sector analysis
+/compare [T1] [T2] — Head-to-head comparison
+/dividend [TICKER] — Dividend analysis
+/momentum — Momentum scan
+/portfolio [AMOUNT] — Build a portfolio
 /help — All commands
 
 <i>Not financial advice. Always do your own research.</i>"""
@@ -454,6 +459,86 @@ Make it real and motivating."""
     send_message(chat_id, "📈 <b>COMPOUNDING MATH</b>\n\n" + response)
 
 
+def handle_sector(chat_id, sector):
+    if not sector:
+        send_message(chat_id, "❌ Usage: /sector tech")
+        return
+    sector = sector.lower()
+    send_message(chat_id, f"⏳ Analyzing {sector} sector...")
+    prompt = f"""Analyze the {sector} sector. Cover: top 3 stocks, macro tailwinds/headwinds, best entry point, key risks, 6-month outlook.
+Today: {datetime.now().strftime('%B %d, %Y')}"""
+    response = ask_claude(prompt)
+    send_message(chat_id, f"🏭 <b>{sector.upper()} SECTOR ANALYSIS</b>\n\n" + response)
+
+
+def handle_compare(chat_id, ticker1, ticker2):
+    if not ticker1 or not ticker2:
+        send_message(chat_id, "❌ Usage: /compare NVDA AMD")
+        return
+    ticker1 = ticker1.upper()
+    ticker2 = ticker2.upper()
+    send_message(chat_id, f"⏳ Comparing ${ticker1} vs ${ticker2}...")
+    quote1 = get_stock_quote(ticker1)
+    quote2 = get_stock_quote(ticker2)
+    context = ""
+    if quote1:
+        context += f"${ticker1}: ${quote1.get('price','N/A')} ({quote1.get('changePercentage',0):+.2f}%) | Cap: ${quote1.get('marketCap',0)/1e9:.2f}B\n"
+    if quote2:
+        context += f"${ticker2}: ${quote2.get('price','N/A')} ({quote2.get('changePercentage',0):+.2f}%) | Cap: ${quote2.get('marketCap',0)/1e9:.2f}B\n"
+    prompt = f"""Compare ${ticker1} vs ${ticker2}. Cover: business model, growth, valuation, moat, which is better and why, when to own each.
+Today: {datetime.now().strftime('%B %d, %Y')}"""
+    response = ask_claude(prompt, context)
+    send_message(chat_id, f"⚔️ <b>${ticker1} vs ${ticker2}</b>\n\n" + response)
+
+
+def handle_dividend(chat_id, ticker):
+    if not ticker:
+        send_message(chat_id, "❌ Usage: /dividend KO")
+        return
+    ticker = ticker.upper()
+    send_message(chat_id, f"⏳ Dividend analysis for ${ticker}...")
+    quote = get_stock_quote(ticker)
+    context = ""
+    if quote:
+        context = f"${ticker}: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%) | Cap: ${quote.get('marketCap',0)/1e9:.2f}B\n"
+    prompt = f"""Dividend analysis for ${ticker}. Cover: current yield, payout ratio, growth history, sustainability, covered call income potential, total return vs price appreciation.
+Today: {datetime.now().strftime('%B %d, %Y')}"""
+    response = ask_claude(prompt, context)
+    send_message(chat_id, f"💰 <b>${ticker} DIVIDEND ANALYSIS</b>\n\n" + response)
+
+
+def handle_momentum(chat_id):
+    send_message(chat_id, "⏳ Running momentum scan...")
+    context = f"Watchlist momentum scan — {datetime.now().strftime('%B %d, %Y')}\n"
+    for symbol in WATCHLIST:
+        quote = get_stock_quote(symbol)
+        if quote:
+            price = quote.get("price", 0)
+            change = quote.get("changePercentage", 0)
+            context += f"{symbol}: ${price:.2f} ({change:+.2f}%)\n"
+        else:
+            context += f"{symbol}: Unavailable\n"
+    prompt = """Momentum scan of watchlist. Rank by momentum. Which are overbought? Oversold? Best risk/reward? Show both sides."""
+    response = ask_claude(prompt, context)
+    send_message(chat_id, f"🚀 <b>MOMENTUM SCAN</b>\n🕐 {datetime.now().strftime('%b %d | %I:%M %p ET')}\n\n" + response)
+
+
+def handle_portfolio(chat_id, allocation):
+    if not allocation:
+        send_message(chat_id, "❌ Usage: /portfolio 50000")
+        return
+    try:
+        amount = int(allocation.replace(",", "").replace("$", ""))
+    except ValueError:
+        send_message(chat_id, "❌ Please provide a numeric amount. Example: /portfolio 50000")
+        return
+    send_message(chat_id, f"⏳ Building ${amount:,} portfolio...")
+    prompt = f"""Build a ${amount:,} portfolio. Cover: asset allocation, 5-7 stock picks, sizing, rebalancing schedule, covered call strategy, expected return, max drawdown, how to execute.
+Today: {datetime.now().strftime('%B %d, %Y')}"""
+    response = ask_claude(prompt)
+    send_message(chat_id, f"🏗️ <b>${amount:,} PORTFOLIO PLAN</b>\n\n" + response)
+
+
 def handle_help(chat_id):
     msg = """⚡ <b>LUMIS CAPITAL — ALL COMMANDS</b>
 
@@ -473,12 +558,20 @@ def handle_help(chat_id):
 💼 <b>Investing:</b>
 /invest [TICKER] — Long-term analysis
 /compounding — Wealth building math
+/dividend [TICKER] — Dividend analysis
 
 📊 <b>Portfolio:</b>
 /watchlist — Live prices
+/momentum — Momentum scan
+/portfolio [AMOUNT] — Build a portfolio
+
+🏭 <b>Advanced:</b>
+/sector [SECTOR] — Sector analysis
+/compare [T1] [T2] — Head-to-head comparison
 
 <b>Examples:</b>
-/full NOW | /opinion ASTS | /invest GOOGL
+/full NOW | /compare NVDA AMD | /sector tech
+/dividend KO | /momentum | /portfolio 50000
 
 <i>Powered by Lumis Nova AI + FMP Live Data</i>
 <i>Not financial advice. Always DYOR.</i>"""
@@ -510,6 +603,11 @@ def process_command(chat_id, text):
         "/insider":   lambda: handle_insider(chat_id, argument),
         "/risk":      lambda: handle_risk(chat_id, argument),
         "/compounding": lambda: handle_compounding(chat_id),
+        "/sector":    lambda: handle_sector(chat_id, argument),
+        "/compare":   lambda: handle_compare(chat_id, argument, parts[2] if len(parts) > 2 else ""),
+        "/dividend":  lambda: handle_dividend(chat_id, argument),
+        "/momentum":  lambda: handle_momentum(chat_id),
+        "/portfolio": lambda: handle_portfolio(chat_id, argument),
     }
 
     handler = routes.get(command)
