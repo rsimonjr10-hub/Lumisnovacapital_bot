@@ -94,7 +94,7 @@ def get_updates(offset=None):
 # FMP FUNCTIONS
 # ─────────────────────────────────────
 def get_stock_quote(symbol):
-    url = f"https://financialmodelingprep.com/stable/quote?symbol={symbol}"
+    url = f"https://financialmodelingprep.com/api/v3/quote/{symbol}"
     params = {"apikey": FMP_API_KEY}
     try:
         response = requests.get(url, params=params, timeout=10)
@@ -108,7 +108,7 @@ def get_stock_quote(symbol):
 
 
 def get_treasury_rates():
-    url = "https://financialmodelingprep.com/stable/treasury-rates"
+    url = "https://financialmodelingprep.com/api/v3/treasury"
     params = {"apikey": FMP_API_KEY}
     try:
         response = requests.get(url, params=params, timeout=10)
@@ -124,7 +124,7 @@ def get_treasury_rates():
 def get_earnings_calendar():
     today = datetime.now().strftime("%Y-%m-%d")
     end = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
-    url = "https://financialmodelingprep.com/stable/earning_calendar"
+    url = "https://financialmodelingprep.com/api/v3/earning_calendar"
     params = {"from": today, "to": end, "apikey": FMP_API_KEY}
     try:
         response = requests.get(url, params=params, timeout=10)
@@ -136,7 +136,7 @@ def get_earnings_calendar():
 
 def get_stock_news():
     tickers = ",".join(WATCHLIST[:6])
-    url = "https://financialmodelingprep.com/stable/news/stock"
+    url = "https://financialmodelingprep.com/api/v3/stock_news"
     params = {"tickers": tickers, "limit": 10, "apikey": FMP_API_KEY}
     try:
         response = requests.get(url, params=params, timeout=10)
@@ -147,7 +147,7 @@ def get_stock_news():
 
 
 def get_analyst_consensus(symbol):
-    url = "https://financialmodelingprep.com/stable/price-target-consensus"
+    url = "https://financialmodelingprep.com/api/v3/price-target-consensus"
     params = {"symbol": symbol, "apikey": FMP_API_KEY}
     try:
         response = requests.get(url, params=params, timeout=10)
