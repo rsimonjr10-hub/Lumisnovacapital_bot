@@ -192,7 +192,7 @@ def ask_claude(prompt, context="", skill_prompt=None):
     full_prompt = f"{context}\n\n{prompt}" if context else prompt
 
     payload = {
-        "model": "claude-3-sonnet-20240229",
+        "model": "claude-sonnet-4-6",
         "max_tokens": 1000,
         "system": system,
         "messages": [{"role": "user", "content": full_prompt}]
