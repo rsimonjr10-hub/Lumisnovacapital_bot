@@ -98,9 +98,13 @@ def get_stock_quote(symbol):
     params = {"apikey": FMP_API_KEY}
     try:
         response = requests.get(url, params=params, timeout=10)
+        if response.status_code != 200:
+            log.error(f"FMP API returned {response.status_code} for quote/{symbol}: {response.text}")
+            return None
         data = response.json()
         if isinstance(data, list) and len(data) > 0:
             return data[0]
+        log.warning(f"FMP quote/{symbol} returned empty or unexpected payload: {data}")
         return None
     except Exception as e:
         log.error(f"FMP quote error for {symbol}: {e}")
@@ -112,9 +116,13 @@ def get_treasury_rates():
     params = {"apikey": FMP_API_KEY}
     try:
         response = requests.get(url, params=params, timeout=10)
+        if response.status_code != 200:
+            log.error(f"FMP API returned {response.status_code} for treasury: {response.text}")
+            return None
         data = response.json()
         if data and len(data) > 0:
             return data[0]
+        log.warning(f"FMP treasury returned empty or unexpected payload: {data}")
         return None
     except Exception as e:
         log.error(f"FMP treasury error: {e}")
@@ -128,6 +136,9 @@ def get_earnings_calendar():
     params = {"from": today, "to": end, "apikey": FMP_API_KEY}
     try:
         response = requests.get(url, params=params, timeout=10)
+        if response.status_code != 200:
+            log.error(f"FMP API returned {response.status_code} for earning_calendar: {response.text}")
+            return []
         return response.json()
     except Exception as e:
         log.error(f"FMP earnings error: {e}")
@@ -140,6 +151,9 @@ def get_stock_news():
     params = {"tickers": tickers, "limit": 10, "apikey": FMP_API_KEY}
     try:
         response = requests.get(url, params=params, timeout=10)
+        if response.status_code != 200:
+            log.error(f"FMP API returned {response.status_code} for stock_news: {response.text}")
+            return []
         return response.json()
     except Exception as e:
         log.error(f"FMP news error: {e}")
@@ -151,9 +165,13 @@ def get_analyst_consensus(symbol):
     params = {"symbol": symbol, "apikey": FMP_API_KEY}
     try:
         response = requests.get(url, params=params, timeout=10)
+        if response.status_code != 200:
+            log.error(f"FMP API returned {response.status_code} for price-target-consensus/{symbol}: {response.text}")
+            return None
         data = response.json()
         if isinstance(data, list) and len(data) > 0:
             return data[0]
+        log.warning(f"FMP price-target-consensus/{symbol} returned empty or unexpected payload: {data}")
         return None
     except Exception as e:
         log.error(f"FMP consensus error: {e}")
@@ -181,9 +199,13 @@ def ask_claude(prompt, context="", skill_prompt=None):
     }
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=30)
+        if response.status_code != 200:
+            log.error(f"Anthropic API returned {response.status_code}: {response.text}")
+            return "Lumis Nova is temporarily unavailable."
         data = response.json()
         if "content" in data and len(data["content"]) > 0:
             return data["content"][0]["text"]
+        log.error(f"Anthropic API returned unexpected payload: {data}")
         return "Unable to get response from Lumis Nova."
     except Exception as e:
         log.error(f"Claude API error: {e}")
@@ -492,13 +514,17 @@ def process_command(chat_id, text):
 
     handler = routes.get(command)
     if handler:
+        log.info(f"Processing command '{command}' for chat {chat_id}")
         handler()
+        log.info(f"Response sent for command '{command}' to chat {chat_id}")
     else:
+        log.info(f"No route matched '{command}', falling back to Claude for chat {chat_id}")
         response = ask_claude(
             text,
             f"User message via Lumis Capital Telegram bot. Today: {datetime.now().strftime('%B %d, %Y')}"
         )
         send_message(chat_id, response)
+        log.info(f"Claude fallback response sent to chat {chat_id}")
 
 
 # ─────────────────────────────────────
@@ -537,7 +563,11 @@ def run_bot():
                     chat_id = message.get("chat", {}).get("id")
                     text = message.get("text", "")
                     if chat_id and text:
+                        log.info(f"Update received — update_id={update['update_id']} chat_id={chat_id} text={text!r}")
                         process_command(str(chat_id), text)
+                        log.info(f"Update {update['update_id']} fully handled")
+            elif not updates.get("ok"):
+                log.error(f"getUpdates returned non-ok response: {updates}")
             time.sleep(1)
         except KeyboardInterrupt:
             log.info("Bot stopped.")
