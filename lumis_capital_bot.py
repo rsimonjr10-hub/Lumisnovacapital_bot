@@ -142,7 +142,7 @@ def get_stock_quote(symbol):
 
 
 def get_treasury_rates():
-    url = "https://financialmodelingprep.com/api/v3/treasury"
+    url = "https://financialmodelingprep.com/stable/treasury"
     params = {"apikey": FMP_API_KEY}
     try:
         response = requests.get(url, params=params, timeout=10)
@@ -165,13 +165,13 @@ def get_treasury_rates():
 def get_earnings_calendar():
     today = datetime.now().strftime("%Y-%m-%d")
     end = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
-    url = "https://financialmodelingprep.com/api/v3/earning_calendar"
+    url = "https://financialmodelingprep.com/stable/earning-calendar"
     params = {"from": today, "to": end, "apikey": FMP_API_KEY}
     try:
         response = requests.get(url, params=params, timeout=10)
         if response.status_code != 200:
-            log.error(f"FMP API returned {response.status_code} for earning_calendar: {response.text}")
-            return {"_error": _fmp_error_message(response.status_code, "earning_calendar")}
+            log.error(f"FMP API returned {response.status_code} for earning-calendar: {response.text}")
+            return {"_error": _fmp_error_message(response.status_code, "earning-calendar")}
         return response.json()
     except requests.exceptions.Timeout:
         log.error("FMP earnings calendar timeout")
@@ -183,13 +183,13 @@ def get_earnings_calendar():
 
 def get_stock_news():
     tickers = ",".join(WATCHLIST[:6])
-    url = "https://financialmodelingprep.com/api/v3/stock_news"
-    params = {"tickers": tickers, "limit": 10, "apikey": FMP_API_KEY}
+    url = "https://financialmodelingprep.com/stable/news/stock"
+    params = {"symbols": tickers, "limit": 10, "apikey": FMP_API_KEY}
     try:
         response = requests.get(url, params=params, timeout=10)
         if response.status_code != 200:
-            log.error(f"FMP API returned {response.status_code} for stock_news: {response.text}")
-            return {"_error": _fmp_error_message(response.status_code, "stock_news")}
+            log.error(f"FMP API returned {response.status_code} for news/stock: {response.text}")
+            return {"_error": _fmp_error_message(response.status_code, "news/stock")}
         return response.json()
     except requests.exceptions.Timeout:
         log.error("FMP stock news timeout")
@@ -200,7 +200,7 @@ def get_stock_news():
 
 
 def get_analyst_consensus(symbol):
-    url = "https://financialmodelingprep.com/api/v3/price-target-consensus"
+    url = "https://financialmodelingprep.com/stable/price-target-consensus"
     params = {"symbol": symbol, "apikey": FMP_API_KEY}
     try:
         response = requests.get(url, params=params, timeout=10)
