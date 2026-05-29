@@ -9,6 +9,7 @@ import requests
 import time
 import logging
 from datetime import datetime, timedelta
+from skills import get_skill_prompt
 
 # ─────────────────────────────────────
 # CONFIGURATION — SET IN RAILWAY ENV
@@ -234,6 +235,11 @@ Your personal market intelligence system.
 /insider [TICKER] — Insider activity
 /risk [TICKER] — Risk check
 /compounding — Wealth math
+/sector [SECTOR] — Sector analysis
+/compare [T1] [T2] — Compare two stocks
+/dividend [TICKER] — Dividend analysis
+/momentum — Momentum plays
+/portfolio [ALLOCATION] — Portfolio review
 /help — All commands
 
 <i>Not financial advice. Always do your own research.</i>"""
@@ -245,6 +251,7 @@ def handle_watchlist(chat_id):
     lines = [f"📊 <b>LUMIS CAPITAL WATCHLIST</b>"]
     lines.append(f"🕐 {datetime.now().strftime('%b %d %Y | %I:%M %p ET')}\n")
 
+    price_context = ""
     for symbol in WATCHLIST:
         quote = get_stock_quote(symbol)
         if quote:
@@ -252,12 +259,20 @@ def handle_watchlist(chat_id):
             change = quote.get("changePercentage", 0)
             emoji = "🟢" if change >= 0 else "🔴"
             lines.append(f"{emoji} <b>{symbol}</b>: ${price:.2f} ({change:+.2f}%)")
+            price_context += f"{symbol}: ${price:.2f} ({change:+.2f}%)\n"
         else:
             lines.append(f"⚪ {symbol}: Unavailable")
 
     lines.append("\n<i>Source: FMP Live ✅</i>")
-    lines.append("<i>Not financial advice.</i>")
     send_message(chat_id, "\n".join(lines))
+
+    if price_context:
+        prompt = f"""Brief market read on today's watchlist price action.
+Today: {datetime.now().strftime('%B %d, %Y')}
+{price_context}"""
+        skill_prompt = get_skill_prompt("/watchlist")
+        commentary = ask_claude(prompt, skill_prompt=skill_prompt)
+        send_message(chat_id, "📝 <b>LUMIS NOVA READ</b>\n\n" + commentary)
 
 
 def handle_yields(chat_id):
@@ -274,11 +289,21 @@ def handle_yields(chat_id):
 10-year: {rates.get('year10', 'N/A')}% ← KEY
 30-year: {rates.get('year30', 'N/A')}%
 
-<i>Source: FMP Live ✅</i>
-<i>Not financial advice.</i>"""
+<i>Source: FMP Live ✅</i>"""
+        send_message(chat_id, msg)
+        context = (
+            f"2yr: {rates.get('year2','N/A')}% | "
+            f"10yr: {rates.get('year10','N/A')}% | "
+            f"30yr: {rates.get('year30','N/A')}%"
+        )
+        prompt = f"""Analyze the current Treasury yield curve and what it means for equity markets.
+Today: {datetime.now().strftime('%B %d, %Y')}
+{context}"""
+        skill_prompt = get_skill_prompt("/yields")
+        commentary = ask_claude(prompt, skill_prompt=skill_prompt)
+        send_message(chat_id, "📝 <b>YIELD CURVE ANALYSIS</b>\n\n" + commentary)
     else:
-        msg = "⚠️ Unable to fetch yield data."
-    send_message(chat_id, msg)
+        send_message(chat_id, "⚠️ Unable to fetch yield data.")
 
 
 def handle_earnings(chat_id):
@@ -294,6 +319,7 @@ def handle_earnings(chat_id):
 
     if filtered:
         lines = ["📅 <b>UPCOMING EARNINGS (7 days)</b>\n"]
+        earnings_context = ""
         for e in sorted(filtered, key=lambda x: x.get("date", ""))[:10]:
             symbol = e.get("symbol", "")
             date = e.get("date", "")
@@ -301,9 +327,15 @@ def handle_earnings(chat_id):
             rev = e.get("revenueEstimated", 0)
             rev_b = f"${rev/1e9:.2f}B" if rev else "N/A"
             lines.append(f"📌 <b>{symbol}</b> | {date}\n   EPS: {eps} | Rev: {rev_b}")
+            earnings_context += f"{symbol} | {date} | EPS est: {eps} | Rev est: {rev_b}\n"
         lines.append("\n<i>Source: FMP Live ✅</i>")
-        lines.append("<i>Not financial advice.</i>")
         send_message(chat_id, "\n".join(lines))
+        prompt = f"""Analyze the upcoming earnings events and what they mean for traders.
+Today: {datetime.now().strftime('%B %d, %Y')}
+{earnings_context}"""
+        skill_prompt = get_skill_prompt("/earnings")
+        commentary = ask_claude(prompt, skill_prompt=skill_prompt)
+        send_message(chat_id, "📝 <b>EARNINGS PREVIEW</b>\n\n" + commentary)
     else:
         send_message(chat_id, "📅 No major earnings in next 7 days.")
 
@@ -319,7 +351,8 @@ def handle_news(chat_id):
 Top 5 stories. Format for Telegram. Use emojis.
 2-3 sentences per story. Today: {datetime.now().strftime('%B %d, %Y')}
 {context}"""
-        response = ask_claude(prompt)
+        skill_prompt = get_skill_prompt("/news")
+        response = ask_claude(prompt, skill_prompt=skill_prompt)
         header = f"📰 <b>LUMIS CAPITAL NEWS</b>\n🕐 {datetime.now().strftime('%b %d | %I:%M %p ET')}\n\n"
         send_message(chat_id, header + response)
     else:
@@ -335,7 +368,8 @@ def handle_macro(chat_id):
     prompt = f"""Macro brief for {datetime.now().strftime('%B %d, %Y')}.
 Cover: yield curve, Fed outlook, key events today, oil/geopolitical impact.
 Format for Telegram. Keep it actionable. {context}"""
-    response = ask_claude(prompt)
+    skill_prompt = get_skill_prompt("/macro")
+    response = ask_claude(prompt, skill_prompt=skill_prompt)
     header = f"📊 <b>MACRO BRIEF</b>\n🕐 {datetime.now().strftime('%b %d | %I:%M %p ET')}\n\n"
     send_message(chat_id, header + response)
 
@@ -360,7 +394,8 @@ def handle_full(chat_id, symbol):
 Cover: business model, moat, top 3 competitors, catalyst,
 bull case, bear case, valuation, entry strategy, stop loss, sizing.
 Today: {datetime.now().strftime('%B %d, %Y')}"""
-    response = ask_claude(prompt, context)
+    skill_prompt = get_skill_prompt("/full")
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
     send_message(chat_id, f"🔍 <b>${symbol} ANALYSIS</b>\n\n" + response)
 
 
@@ -374,7 +409,8 @@ def handle_opinion(chat_id, symbol):
     if quote:
         context = f"${symbol}: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%)"
     prompt = f"Quick honest opinion on ${symbol}. Buy/sell/hold and why. 4-5 sentences. One key risk. One key catalyst."
-    response = ask_claude(prompt, context)
+    skill_prompt = get_skill_prompt("/opinion")
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
     send_message(chat_id, f"💬 <b>${symbol} QUICK TAKE</b>\n\n" + response)
 
 
@@ -389,7 +425,8 @@ def handle_scout(chat_id):
 For each: ticker, thesis, why this week specifically,
 bull case, bear case, entry range, stop loss, target, sizing.
 Show both sides. Never just hype."""
-    response = ask_claude(prompt, context)
+    skill_prompt = get_skill_prompt("/scout")
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
     send_message(chat_id, f"🔭 <b>WEEKLY SCOUT</b>\n🕐 {datetime.now().strftime('%b %d, %Y')}\n\n" + response)
 
 
@@ -411,7 +448,8 @@ management signals, covered call income potential,
 compounding scenario ($10K over 5yr/10yr),
 how to build the position, stop loss.
 Think years not weeks."""
-    response = ask_claude(prompt, context)
+    skill_prompt = get_skill_prompt("/invest")
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
     send_message(chat_id, f"💼 <b>${symbol} INVESTING VIEW</b>\n\n" + response)
 
 
@@ -424,7 +462,8 @@ def handle_insider(chat_id, symbol):
 Cover: recent buys, recent sells, net sentiment,
 CEO ownership %, what the activity signals.
 Today: {datetime.now().strftime('%B %d, %Y')}"""
-    response = ask_claude(prompt)
+    skill_prompt = get_skill_prompt("/insider")
+    response = ask_claude(prompt, skill_prompt=skill_prompt)
     send_message(chat_id, f"👁️ <b>${symbol} INSIDER ACTIVITY</b>\n\n" + response)
 
 
@@ -441,7 +480,8 @@ def handle_risk(chat_id, symbol):
 Cover: appropriate sizing for a $10K account,
 max loss at stop, correlation risk, Kelly criterion suggestion.
 Be honest. Push back if sizing seems aggressive."""
-    response = ask_claude(prompt, context)
+    skill_prompt = get_skill_prompt("/risk")
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
     send_message(chat_id, f"⚠️ <b>${symbol} RISK CHECK</b>\n\n" + response)
 
 
@@ -450,7 +490,8 @@ def handle_compounding(chat_id):
 At 10%, 15%, 20%, 25% annual return — value at 5yr, 10yr, 20yr.
 Then show covered call income overlay: $300/month reinvested.
 Make it real and motivating."""
-    response = ask_claude(prompt)
+    skill_prompt = get_skill_prompt("/compounding")
+    response = ask_claude(prompt, skill_prompt=skill_prompt)
     send_message(chat_id, "📈 <b>COMPOUNDING MATH</b>\n\n" + response)
 
 
@@ -469,20 +510,107 @@ def handle_help(chat_id):
 /scout — Weekly picks
 /insider [TICKER] — Insider activity
 /risk [TICKER] — Position risk check
+/sector [SECTOR] — Sector analysis
+/compare [T1] [T2] — Compare two stocks
 
 💼 <b>Investing:</b>
 /invest [TICKER] — Long-term analysis
 /compounding — Wealth building math
+/dividend [TICKER] — Dividend analysis
 
 📊 <b>Portfolio:</b>
 /watchlist — Live prices
+/momentum — Momentum plays
+/portfolio [ALLOCATION] — Portfolio review
 
 <b>Examples:</b>
 /full NOW | /opinion ASTS | /invest GOOGL
+/sector tech | /compare NVDA AMD | /dividend AAPL
 
 <i>Powered by Lumis Nova AI + FMP Live Data</i>
 <i>Not financial advice. Always DYOR.</i>"""
     send_message(chat_id, msg)
+
+
+def handle_sector(chat_id, sector):
+    if not sector:
+        send_message(chat_id, "❌ Usage: /sector tech")
+        return
+    send_message(chat_id, f"⏳ Analyzing {sector} sector...")
+    prompt = f"""Sector analysis for the {sector} sector.
+Today: {datetime.now().strftime('%B %d, %Y')}
+Cover: key drivers, top stocks, ETF performance, bull case, bear case, positioning."""
+    skill_prompt = get_skill_prompt("/sector")
+    response = ask_claude(prompt, skill_prompt=skill_prompt)
+    send_message(chat_id, f"🏭 <b>{sector.upper()} SECTOR ANALYSIS</b>\n\n" + response)
+
+
+def handle_compare(chat_id, ticker1, ticker2):
+    if not ticker1 or not ticker2:
+        send_message(chat_id, "❌ Usage: /compare NVDA AMD")
+        return
+    ticker1 = ticker1.upper()
+    ticker2 = ticker2.upper()
+    send_message(chat_id, f"⏳ Comparing ${ticker1} vs ${ticker2}...")
+    quote1 = get_stock_quote(ticker1)
+    quote2 = get_stock_quote(ticker2)
+    context = ""
+    if quote1:
+        context += f"${ticker1}: ${quote1.get('price','N/A')} | Cap: ${quote1.get('marketCap',0)/1e9:.2f}B\n"
+    if quote2:
+        context += f"${ticker2}: ${quote2.get('price','N/A')} | Cap: ${quote2.get('marketCap',0)/1e9:.2f}B\n"
+    prompt = f"""Head-to-head comparison: ${ticker1} vs ${ticker2}.
+Cover: business model, valuation, growth, moat, bull case and bear case for each, verdict.
+Today: {datetime.now().strftime('%B %d, %Y')}"""
+    skill_prompt = get_skill_prompt("/compare")
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    send_message(chat_id, f"⚔️ <b>${ticker1} vs ${ticker2}</b>\n\n" + response)
+
+
+def handle_dividend(chat_id, symbol):
+    if not symbol:
+        send_message(chat_id, "❌ Usage: /dividend AAPL")
+        return
+    symbol = symbol.upper()
+    send_message(chat_id, f"⏳ Analyzing ${symbol} dividend...")
+    quote = get_stock_quote(symbol)
+    context = ""
+    if quote:
+        context = f"${symbol}: ${quote.get('price','N/A')} | Cap: ${quote.get('marketCap',0)/1e9:.2f}B\n"
+    prompt = f"""Dividend analysis for ${symbol}.
+Cover: yield, payout history, sustainability, FCF coverage, bull case, bear case, income scenario.
+Today: {datetime.now().strftime('%B %d, %Y')}"""
+    skill_prompt = get_skill_prompt("/dividend")
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    send_message(chat_id, f"💰 <b>${symbol} DIVIDEND ANALYSIS</b>\n\n" + response)
+
+
+def handle_momentum(chat_id):
+    send_message(chat_id, "⏳ Scanning for momentum plays...")
+    context = f"Momentum scan {datetime.now().strftime('%B %d, %Y')}\n"
+    for symbol in WATCHLIST:
+        quote = get_stock_quote(symbol)
+        if quote:
+            context += f"{symbol}: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%)\n"
+    prompt = f"""Identify the top momentum plays from the watchlist.
+Cover: price action, key levels, bull case (continuation), bear case (reversal), entry strategy.
+Today: {datetime.now().strftime('%B %d, %Y')}"""
+    skill_prompt = get_skill_prompt("/momentum")
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    send_message(chat_id, f"🚀 <b>MOMENTUM PLAYS</b>\n🕐 {datetime.now().strftime('%b %d, %Y')}\n\n" + response)
+
+
+def handle_portfolio(chat_id, allocation):
+    if not allocation:
+        send_message(chat_id, "❌ Usage: /portfolio NVDA:30 AAPL:20 CASH:50")
+        return
+    send_message(chat_id, "⏳ Reviewing your portfolio allocation...")
+    prompt = f"""Portfolio review for the following allocation: {allocation}
+Cover: composition, diversification, risk assessment, bull case, bear case, rebalancing suggestions.
+Today: {datetime.now().strftime('%B %d, %Y')}"""
+    skill_prompt = get_skill_prompt("/portfolio")
+    response = ask_claude(prompt, skill_prompt=skill_prompt)
+    send_message(chat_id, "📊 <b>PORTFOLIO REVIEW</b>\n\n" + response)
 
 
 # ─────────────────────────────────────
@@ -493,23 +621,31 @@ def process_command(chat_id, text):
     parts = text.split()
     command = parts[0].lower() if parts else ""
     argument = parts[1] if len(parts) > 1 else ""
+    argument2 = parts[2] if len(parts) > 2 else ""
+    # For /portfolio and /sector, join all remaining args as one string
+    rest = " ".join(parts[1:]) if len(parts) > 1 else ""
     log.info(f"Command: {command} | Arg: {argument} | Chat: {chat_id}")
 
     routes = {
-        "/start":     lambda: handle_start(chat_id),
-        "/help":      lambda: handle_help(chat_id),
-        "/watchlist": lambda: handle_watchlist(chat_id),
-        "/yields":    lambda: handle_yields(chat_id),
-        "/earnings":  lambda: handle_earnings(chat_id),
-        "/news":      lambda: handle_news(chat_id),
-        "/macro":     lambda: handle_macro(chat_id),
-        "/scout":     lambda: handle_scout(chat_id),
-        "/full":      lambda: handle_full(chat_id, argument),
-        "/opinion":   lambda: handle_opinion(chat_id, argument),
-        "/invest":    lambda: handle_invest(chat_id, argument),
-        "/insider":   lambda: handle_insider(chat_id, argument),
-        "/risk":      lambda: handle_risk(chat_id, argument),
+        "/start":       lambda: handle_start(chat_id),
+        "/help":        lambda: handle_help(chat_id),
+        "/watchlist":   lambda: handle_watchlist(chat_id),
+        "/yields":      lambda: handle_yields(chat_id),
+        "/earnings":    lambda: handle_earnings(chat_id),
+        "/news":        lambda: handle_news(chat_id),
+        "/macro":       lambda: handle_macro(chat_id),
+        "/scout":       lambda: handle_scout(chat_id),
+        "/full":        lambda: handle_full(chat_id, argument),
+        "/opinion":     lambda: handle_opinion(chat_id, argument),
+        "/invest":      lambda: handle_invest(chat_id, argument),
+        "/insider":     lambda: handle_insider(chat_id, argument),
+        "/risk":        lambda: handle_risk(chat_id, argument),
         "/compounding": lambda: handle_compounding(chat_id),
+        "/sector":      lambda: handle_sector(chat_id, rest),
+        "/compare":     lambda: handle_compare(chat_id, argument, argument2),
+        "/dividend":    lambda: handle_dividend(chat_id, argument),
+        "/momentum":    lambda: handle_momentum(chat_id),
+        "/portfolio":   lambda: handle_portfolio(chat_id, rest),
     }
 
     handler = routes.get(command)
