@@ -42,14 +42,19 @@ WATCHLIST = [
 # ─────────────────────────────────────
 SYSTEM_PROMPT = """You are Lumis Nova, an AI-powered market research
 assistant for Lumis Capital. You provide trading and investing intelligence
-using live market data.
+using live market data from FMP (Financial Modeling Prep).
+
+CRITICAL: You are receiving LIVE market data from FMP API. This data is current
+as of today. Use it directly — do not worry about your knowledge cutoff. The data
+you receive IS the source of truth for current prices, earnings, yields, and analyst
+consensus. Analyze it with confidence.
 
 CORE RULES:
 - Always show bull AND bear case on every analysis
 - Always include position sizing recommendations
 - Always include stop loss levels
 - Translate all financials to USD
-- Label all data sources clearly
+- Label all data sources clearly (FMP Live ✅)
 - Separate trading (weeks) from investing (years)
 - Show earnings surprise history before any options trade idea
 - Be honest when uncertain — never guess
@@ -588,13 +593,13 @@ Today: {datetime.now().strftime('%B %d, %Y')}"""
 def handle_momentum(chat_id):
     send_message(chat_id, "⏳ Scanning for momentum plays...")
     context = f"Momentum scan {datetime.now().strftime('%B %d, %Y')}\n"
-    for symbol in WATCHLIST:
+    for symbol in WATCHLIST[:8]:
         quote = get_stock_quote(symbol)
         if quote:
             context += f"{symbol}: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%)\n"
-    prompt = f"""Identify the top momentum plays from the watchlist.
-Cover: price action, key levels, bull case (continuation), bear case (reversal), entry strategy.
-Today: {datetime.now().strftime('%B %d, %Y')}"""
+    prompt = """Top 3 momentum plays right now.
+For each: ticker, why it's moving, technical levels, bull case, bear case, entry, stop loss.
+Show both continuation and reversal scenarios."""
     skill_prompt = get_skill_prompt("/momentum")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
     send_message(chat_id, f"🚀 <b>MOMENTUM PLAYS</b>\n🕐 {datetime.now().strftime('%b %d, %Y')}\n\n" + response)
@@ -602,116 +607,115 @@ Today: {datetime.now().strftime('%B %d, %Y')}"""
 
 def handle_portfolio(chat_id, allocation):
     if not allocation:
-        send_message(chat_id, "❌ Usage: /portfolio NVDA:30 AAPL:20 CASH:50")
+        send_message(chat_id, "❌ Usage: /portfolio 50% NVDA, 30% AAPL, 20% CASH")
         return
-    send_message(chat_id, "⏳ Reviewing your portfolio allocation...")
-    prompt = f"""Portfolio review for the following allocation: {allocation}
-Cover: composition, diversification, risk assessment, bull case, bear case, rebalancing suggestions.
-Today: {datetime.now().strftime('%B %d, %Y')}"""
+    send_message(chat_id, "⏳ Analyzing portfolio...")
+    prompt = f"""Portfolio analysis for the following allocation:
+{allocation}
+
+Today: {datetime.now().strftime('%B %d, %Y')}
+
+Cover: diversification, sector exposure, concentration risk, bull case, bear case, rebalancing suggestions."""
     skill_prompt = get_skill_prompt("/portfolio")
     response = ask_claude(prompt, skill_prompt=skill_prompt)
-    send_message(chat_id, "📊 <b>PORTFOLIO REVIEW</b>\n\n" + response)
-
-
-# ─────────────────────────────────────
-# COMMAND ROUTER
-# ─────────────────────────────────────
-def process_command(chat_id, text):
-    text = text.strip()
-    parts = text.split()
-    command = parts[0].lower() if parts else ""
-    argument = parts[1] if len(parts) > 1 else ""
-    argument2 = parts[2] if len(parts) > 2 else ""
-    # For /portfolio and /sector, join all remaining args as one string
-    rest = " ".join(parts[1:]) if len(parts) > 1 else ""
-    log.info(f"Command: {command} | Arg: {argument} | Chat: {chat_id}")
-
-    routes = {
-        "/start":       lambda: handle_start(chat_id),
-        "/help":        lambda: handle_help(chat_id),
-        "/watchlist":   lambda: handle_watchlist(chat_id),
-        "/yields":      lambda: handle_yields(chat_id),
-        "/earnings":    lambda: handle_earnings(chat_id),
-        "/news":        lambda: handle_news(chat_id),
-        "/macro":       lambda: handle_macro(chat_id),
-        "/scout":       lambda: handle_scout(chat_id),
-        "/full":        lambda: handle_full(chat_id, argument),
-        "/opinion":     lambda: handle_opinion(chat_id, argument),
-        "/invest":      lambda: handle_invest(chat_id, argument),
-        "/insider":     lambda: handle_insider(chat_id, argument),
-        "/risk":        lambda: handle_risk(chat_id, argument),
-        "/compounding": lambda: handle_compounding(chat_id),
-        "/sector":      lambda: handle_sector(chat_id, rest),
-        "/compare":     lambda: handle_compare(chat_id, argument, argument2),
-        "/dividend":    lambda: handle_dividend(chat_id, argument),
-        "/momentum":    lambda: handle_momentum(chat_id),
-        "/portfolio":   lambda: handle_portfolio(chat_id, rest),
-    }
-
-    handler = routes.get(command)
-    if handler:
-        log.info(f"Processing command '{command}' for chat {chat_id}")
-        handler()
-        log.info(f"Response sent for command '{command}' to chat {chat_id}")
-    else:
-        log.info(f"No route matched '{command}', falling back to Claude for chat {chat_id}")
-        response = ask_claude(
-            text,
-            f"User message via Lumis Capital Telegram bot. Today: {datetime.now().strftime('%B %d, %Y')}"
-        )
-        send_message(chat_id, response)
-        log.info(f"Claude fallback response sent to chat {chat_id}")
+    send_message(chat_id, f"📊 <b>PORTFOLIO REVIEW</b>\n\n" + response)
 
 
 # ─────────────────────────────────────
 # MAIN LOOP
 # ─────────────────────────────────────
-def run_bot():
+def main():
     log.info("🚀 Lumis Capital Bot starting...")
+    log.info(f"TELEGRAM_TOKEN: {'✅' if TELEGRAM_TOKEN else '❌'}")
+    log.info(f"CHAT_ID: {'✅' if CHAT_ID else '❌'}")
+    log.info(f"FMP_API_KEY: {'✅' if FMP_API_KEY else '❌'}")
+    log.info(f"ANTHROPIC_API_KEY: {'✅' if ANTHROPIC_API_KEY else '❌'}")
 
-    missing = []
-    if not TELEGRAM_TOKEN:    missing.append("TELEGRAM_TOKEN")
-    if not CHAT_ID:           missing.append("CHAT_ID")
-    if not FMP_API_KEY:       missing.append("FMP_API_KEY")
-    if not ANTHROPIC_API_KEY: missing.append("ANTHROPIC_API_KEY")
-
-    if missing:
-        log.error(f"❌ Missing variables: {', '.join(missing)}")
-        return
-
-    send_message(
-        CHAT_ID,
-        f"⚡ <b>Lumis Capital Bot Online</b>\n"
-        f"🕐 {datetime.now().strftime('%B %d, %Y | %I:%M %p ET')}\n"
-        f"Type /help for all commands."
-    )
-
-    log.info("✅ Bot running. Listening for commands...")
     offset = None
-
     while True:
         try:
-            updates = get_updates(offset)
-            if updates.get("ok") and updates.get("result"):
-                for update in updates["result"]:
-                    offset = update["update_id"] + 1
-                    message = update.get("message", {})
-                    chat_id = message.get("chat", {}).get("id")
-                    text = message.get("text", "")
-                    if chat_id and text:
-                        log.info(f"Update received — update_id={update['update_id']} chat_id={chat_id} text={text!r}")
-                        process_command(str(chat_id), text)
-                        log.info(f"Update {update['update_id']} fully handled")
-            elif not updates.get("ok"):
-                log.error(f"getUpdates returned non-ok response: {updates}")
-            time.sleep(1)
-        except KeyboardInterrupt:
-            log.info("Bot stopped.")
-            break
+            result = get_updates(offset)
+            if not result.get("ok"):
+                log.error(f"Telegram getUpdates failed: {result}")
+                time.sleep(5)
+                continue
+
+            updates = result.get("result", [])
+            if not updates:
+                time.sleep(1)
+                continue
+
+            for update in updates:
+                offset = update["update_id"] + 1
+                message = update.get("message", {})
+                chat_id = message.get("chat", {}).get("id")
+                text = message.get("text", "").strip()
+
+                if not chat_id or not text:
+                    continue
+
+                log.info(f"[{chat_id}] {text}")
+
+                # Parse command
+                parts = text.split()
+                command = parts[0].lower()
+
+                if command == "/start":
+                    handle_start(chat_id)
+                elif command == "/help":
+                    handle_help(chat_id)
+                elif command == "/watchlist":
+                    handle_watchlist(chat_id)
+                elif command == "/yields":
+                    handle_yields(chat_id)
+                elif command == "/earnings":
+                    handle_earnings(chat_id)
+                elif command == "/news":
+                    handle_news(chat_id)
+                elif command == "/macro":
+                    handle_macro(chat_id)
+                elif command == "/full":
+                    symbol = parts[1] if len(parts) > 1 else None
+                    handle_full(chat_id, symbol)
+                elif command == "/opinion":
+                    symbol = parts[1] if len(parts) > 1 else None
+                    handle_opinion(chat_id, symbol)
+                elif command == "/scout":
+                    handle_scout(chat_id)
+                elif command == "/invest":
+                    symbol = parts[1] if len(parts) > 1 else None
+                    handle_invest(chat_id, symbol)
+                elif command == "/insider":
+                    symbol = parts[1] if len(parts) > 1 else None
+                    handle_insider(chat_id, symbol)
+                elif command == "/risk":
+                    symbol = parts[1] if len(parts) > 1 else None
+                    handle_risk(chat_id, symbol)
+                elif command == "/compounding":
+                    handle_compounding(chat_id)
+                elif command == "/sector":
+                    sector = parts[1] if len(parts) > 1 else None
+                    handle_sector(chat_id, sector)
+                elif command == "/compare":
+                    ticker1 = parts[1] if len(parts) > 1 else None
+                    ticker2 = parts[2] if len(parts) > 2 else None
+                    handle_compare(chat_id, ticker1, ticker2)
+                elif command == "/dividend":
+                    symbol = parts[1] if len(parts) > 1 else None
+                    handle_dividend(chat_id, symbol)
+                elif command == "/momentum":
+                    handle_momentum(chat_id)
+                elif command == "/portfolio":
+                    allocation = " ".join(parts[1:]) if len(parts) > 1 else None
+                    handle_portfolio(chat_id, allocation)
+                else:
+                    send_message(chat_id, "❌ Unknown command. Try /help")
+
         except Exception as e:
-            log.error(f"Bot error: {e}")
+            log.error(f"Main loop error: {e}")
             time.sleep(5)
 
 
 if __name__ == "__main__":
-    run_bot()
+    main()
+
