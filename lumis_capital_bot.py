@@ -121,28 +121,28 @@ def _fmp_error_message(status_code, endpoint=""):
 # FMP FUNCTIONS
 # ─────────────────────────────────────
 def get_stock_quote(symbol):
-    url = f"https://financialmodelingprep.com/stable/quote/{symbol}"
-    params = {"apikey": FMP_API_KEY}
+    url = f"https://fmp-data-api-production.up.railway.app/quote/{symbol}"
     try:
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, timeout=10)
         if response.status_code != 200:
-            log.error(f"FMP API returned {response.status_code} for quote/{symbol}: {response.text}")
+            log.error(f"fmp-data-api returned {response.status_code} for quote/{symbol}: {response.text}")
             return {"_error": _fmp_error_message(response.status_code, f"quote/{symbol}")}
         data = response.json()
         if isinstance(data, list) and len(data) > 0:
             return data[0]
-        log.warning(f"FMP quote/{symbol} returned empty or unexpected payload: {data}")
+        log.warning(f"fmp-data-api quote/{symbol} returned empty or unexpected payload: {data}")
         return None
     except requests.exceptions.Timeout:
-        log.error(f"FMP quote timeout for {symbol}")
+        log.error(f"fmp-data-api quote timeout for {symbol}")
         return {"_error": f"⚠️ FMP timed out fetching quote for {symbol.upper()}. Try again shortly."}
     except Exception as e:
-        log.error(f"FMP quote error for {symbol}: {e}")
+        log.error(f"fmp-data-api quote error for {symbol}: {e}")
         return None
+
 
 
 def get_treasury_rates():
-    url = "https://financialmodelingprep.com/stable/treasury"
+    url = "https://financialmodelingprep.com/api/v3/treasury"
     params = {"apikey": FMP_API_KEY}
     try:
         response = requests.get(url, params=params, timeout=10)
@@ -165,7 +165,7 @@ def get_treasury_rates():
 def get_earnings_calendar():
     today = datetime.now().strftime("%Y-%m-%d")
     end = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
-    url = "https://financialmodelingprep.com/stable/earning_calendar"
+    url = "https://financialmodelingprep.com/api/v3/earning_calendar"
     params = {"from": today, "to": end, "apikey": FMP_API_KEY}
     try:
         response = requests.get(url, params=params, timeout=10)
@@ -183,7 +183,7 @@ def get_earnings_calendar():
 
 def get_stock_news():
     tickers = ",".join(WATCHLIST[:6])
-    url = "https://financialmodelingprep.com/stable/stock_news"
+    url = "https://financialmodelingprep.com/api/v3/stock_news"
     params = {"tickers": tickers, "limit": 10, "apikey": FMP_API_KEY}
     try:
         response = requests.get(url, params=params, timeout=10)
@@ -200,7 +200,7 @@ def get_stock_news():
 
 
 def get_analyst_consensus(symbol):
-    url = "https://financialmodelingprep.com/stable/price-target-consensus"
+    url = "https://financialmodelingprep.com/api/v3/price-target-consensus"
     params = {"symbol": symbol, "apikey": FMP_API_KEY}
     try:
         response = requests.get(url, params=params, timeout=10)
@@ -218,6 +218,7 @@ def get_analyst_consensus(symbol):
     except Exception as e:
         log.error(f"FMP consensus error: {e}")
         return None
+
 
 
 # ─────────────────────────────────────
@@ -807,10 +808,10 @@ def handle_test(chat_id):
     # ── 1. Telegram ──────────────────────────────────────────────
     results.append("✅ <b>Telegram</b>: Connected (you received this message)")
 
-    # ── 2. FMP ───────────────────────────────────────────────────
+    # ── 2. FMP (via fmp-data-api proxy) ─────────────────────────
     try:
-        url = "https://financialmodelingprep.com/stable/quote/AAPL"
-        resp = requests.get(url, params={"apikey": FMP_API_KEY}, timeout=10)
+        url = "https://fmp-data-api-production.up.railway.app/quote/AAPL"
+        resp = requests.get(url, timeout=10)
         if resp.status_code == 200:
             data = resp.json()
             if isinstance(data, list) and len(data) > 0:
@@ -830,6 +831,7 @@ def handle_test(chat_id):
         results.append("❌ <b>FMP API</b>: Timeout — no response within 10s")
     except Exception as e:
         results.append(f"❌ <b>FMP API</b>: Exception — {e}")
+
 
     # ── 3. Claude / Anthropic ────────────────────────────────────
     try:
