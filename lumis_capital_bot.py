@@ -180,6 +180,38 @@ def get_analyst_consensus(symbol):
 
 
 # ─────────────────────────────────────
+# FMP-DATA-API (DIRECT PRICE LOOKUP)
+# ─────────────────────────────────────
+def get_stock_price_only(symbol):
+    """
+    Fetch a live quote from the fmp-data-api service and return a
+    minimal formatted string — ticker, price, and change % only.
+    No Claude processing, no disclaimers.
+    """
+    url = f"https://fmp-data-api-production.up.railway.app/quote/{symbol.upper()}"
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code != 200:
+            log.error(f"fmp-data-api returned {response.status_code} for {symbol}: {response.text}")
+            return f"⚠️ Could not fetch price for {symbol.upper()}. Try again shortly."
+        data = response.json()
+        # Accept both a list payload and a plain dict payload
+        quote = data[0] if isinstance(data, list) and len(data) > 0 else data
+        if not quote:
+            return f"⚠️ No data returned for {symbol.upper()}."
+        price  = quote.get("price", quote.get("regularMarketPrice", None))
+        change = quote.get("changePercentage", quote.get("changesPercentage", quote.get("change_percentage", None)))
+        if price is None:
+            return f"⚠️ Price unavailable for {symbol.upper()}."
+        arrow = "↑" if (change or 0) >= 0 else "↓"
+        change_str = f"{change:+.2f}%" if change is not None else "N/A"
+        return f"{symbol.upper()}: ${float(price):.2f} {arrow} {change_str}"
+    except Exception as e:
+        log.error(f"fmp-data-api price error for {symbol}: {e}")
+        return f"⚠️ Error fetching price for {symbol.upper()}."
+
+
+# ─────────────────────────────────────
 # CLAUDE AI
 # ─────────────────────────────────────
 def ask_claude(prompt, context="", skill_prompt=None):
@@ -228,6 +260,7 @@ Your personal market intelligence system.
 /earnings — Upcoming calendar
 /scout — Weekly stock picks
 /watchlist — Live prices
+/price [TICKER] — Live quote (no AI)
 /full [TICKER] — Full analysis
 /opinion [TICKER] — Quick take
 /invest [TICKER] — Long-term view
@@ -520,6 +553,7 @@ def handle_help(chat_id):
 
 📊 <b>Portfolio:</b>
 /watchlist — Live prices
+/price [TICKER] — Live quote (no AI)
 /momentum — Momentum plays
 /portfolio [ALLOCATION] — Portfolio review
 
@@ -613,6 +647,14 @@ Today: {datetime.now().strftime('%B %d, %Y')}"""
     send_message(chat_id, "📊 <b>PORTFOLIO REVIEW</b>\n\n" + response)
 
 
+def handle_price(chat_id, symbol):
+    if not symbol:
+        send_message(chat_id, "❌ Usage: /price NVDA")
+        return
+    result = get_stock_price_only(symbol)
+    send_message(chat_id, result)
+
+
 # ─────────────────────────────────────
 # COMMAND ROUTER
 # ─────────────────────────────────────
@@ -646,6 +688,7 @@ def process_command(chat_id, text):
         "/dividend":    lambda: handle_dividend(chat_id, argument),
         "/momentum":    lambda: handle_momentum(chat_id),
         "/portfolio":   lambda: handle_portfolio(chat_id, rest),
+        "/price":       lambda: handle_price(chat_id, argument),
     }
 
     handler = routes.get(command)
