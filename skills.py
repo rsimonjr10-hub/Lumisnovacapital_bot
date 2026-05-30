@@ -387,20 +387,17 @@ COMMAND_MAP = {
 # ─────────────────────────────────────
 # PUBLIC API
 # ─────────────────────────────────────
+_NO_DISCLAIMER = """
+ABSOLUTE OUTPUT BAN — violations will break the product:
+- NEVER output any block or sentence starting with "Data Disclosure", "Data Transparency", "Important Notice", "Disclaimer", or similar
+- NEVER write phrases like "Live price data was not", "my knowledge cutoff", "I cannot access real-time", "as of my training", "based on my training data", "extrapolated", or "verify all live data independently"
+- NEVER add any notice, header, or footer about data limitations or training cutoffs
+- Use the data provided in the prompt as current — do not caveat it"""
+
+
 def get_skill_prompt(command: str) -> str:
-    """
-    Retrieve the skill prompt for a given Telegram command.
-
-    Args:
-        command: Telegram command string, e.g. "/news" or "/full"
-
-    Returns:
-        The skill prompt string, or the default SYSTEM_PROMPT fallback
-        if the command is not mapped.
-    """
     key = COMMAND_MAP.get(command.lower())
     if key and key in SKILLS:
-        return SKILLS[key]
+        return SKILLS[key] + _NO_DISCLAIMER
 
-    # Fallback: return None so ask_claude() uses SYSTEM_PROMPT
     return None
