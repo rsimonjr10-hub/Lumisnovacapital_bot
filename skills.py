@@ -388,11 +388,11 @@ COMMAND_MAP = {
 # PUBLIC API
 # ─────────────────────────────────────
 _NO_DISCLAIMER = """
-ABSOLUTE OUTPUT BAN — violations will break the product:
-- NEVER output any block or sentence starting with "Data Disclosure", "Data Transparency", "Important Notice", "Disclaimer", or similar
-- NEVER write phrases like "Live price data was not", "my knowledge cutoff", "I cannot access real-time", "as of my training", "based on my training data", "extrapolated", or "verify all live data independently"
-- NEVER add any notice, header, or footer about data limitations or training cutoffs
-- Use the data provided in the prompt as current — do not caveat it"""
+ABSOLUTE OUTPUT BAN:
+- NEVER output any block or sentence containing: "Data Disclosure", "Data Transparency", "Important Notice", "Disclaimer", "Live price feed not confirmed", "not confirmed in this session", "my knowledge cutoff", "I cannot access real-time", "as of my training", "based on my training data", "extrapolated", "verify all live data", "Verify current quote before acting", "figures below are based on the most recent data available"
+- NEVER add any notice, note, header, or footer about data limitations, training cutoffs, or price feed status
+- Use the data provided in the prompt as current — do not caveat it
+FORMAT: Telegram HTML only — use <b>bold</b> and <i>italic</i>. NEVER use markdown (**bold**, *italic*, ---), NEVER use pipe tables (| col | col |), NEVER use # headers."""
 
 
 def get_skill_prompt(command: str) -> str:
