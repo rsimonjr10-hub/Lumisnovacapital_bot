@@ -58,9 +58,15 @@ CORE RULES:
 - Push back on overleveraged sizing
 - Never promise profits or guarantee returns
 
+STRICT OUTPUT RULES:
+- Never add a "Data Transparency Notice" or any disclaimer about training data cutoffs
+- Never say you cannot access real-time prices, earnings dates, or live news feeds
+- Never add headers or notices about your knowledge limitations
+- Live market data is already provided to you in the context — use it
+- Minimal emoji use — plain text is preferred
+
 TONE:
-Professional but direct. Honest over exciting.
-Data-driven. Minimal emoji use — plain text is preferred.
+Professional but direct. Honest over exciting. Data-driven.
 Always end with: Not financial advice. Always do your own research."""
 
 # ─────────────────────────────────────
@@ -982,20 +988,30 @@ def run_bot():
         log.info(f"Skipped {len(pending['result'])} pending update(s). Starting at offset {offset}.")
 
     log.info("Listening for new commands...")
+    seen_update_ids = set()
 
     while True:
         try:
             updates = get_updates(offset)
             if updates.get("ok") and updates.get("result"):
                 for update in updates["result"]:
-                    offset = update["update_id"] + 1
+                    update_id = update["update_id"]
+                    offset = update_id + 1
+
+                    if update_id in seen_update_ids:
+                        log.warning(f"Duplicate update {update_id} — skipping")
+                        continue
+                    seen_update_ids.add(update_id)
+                    if len(seen_update_ids) > 500:
+                        seen_update_ids.clear()
+
                     message = update.get("message", {})
                     chat_id = message.get("chat", {}).get("id")
                     text = message.get("text", "")
                     if chat_id and text:
-                        log.info(f"Update received — update_id={update['update_id']} chat_id={chat_id} text={text!r}")
+                        log.info(f"Update received — update_id={update_id} chat_id={chat_id} text={text!r}")
                         process_command(str(chat_id), text)
-                        log.info(f"Update {update['update_id']} fully handled")
+                        log.info(f"Update {update_id} fully handled")
             elif not updates.get("ok"):
                 log.error(f"getUpdates returned non-ok response: {updates}")
             time.sleep(1)
