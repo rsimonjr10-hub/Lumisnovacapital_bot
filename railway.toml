@@ -6,3 +6,7 @@ startCommand = "python lumis_capital_bot.py"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
 numReplicas = 1
+
+[[deploy.healthcheck]]
+path = "/webhook"
+timeout = 10
