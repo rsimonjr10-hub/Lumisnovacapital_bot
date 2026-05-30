@@ -6,6 +6,7 @@ Telegram Bot for Market Intelligence
 
 import os
 import re
+import random
 import requests
 import time
 import logging
@@ -543,17 +544,44 @@ def handle_opinion(chat_id, symbol):
     send_message(chat_id, f"<b>{symbol} QUICK TAKE</b>\n\n" + response)
 
 
+_SCOUT_SECTORS = [
+    "energy", "healthcare", "financials", "industrials",
+    "consumer staples", "utilities", "materials", "real estate",
+    "consumer discretionary", "biotech", "defense", "clean energy",
+    "semiconductors (small/mid cap only)", "software (not mega-cap)",
+    "retail", "transportation", "commodities", "insurance",
+]
+
 def handle_scout(chat_id):
     send_message(chat_id, "Running weekly scout...")
+
+    # Randomly pick 2 sectors and a theme to force different stocks every call
+    focus_sectors = random.sample(_SCOUT_SECTORS, 2)
+    exclude = ", ".join(WATCHLIST)
+
     context = f"Weekly scout {datetime.now().strftime('%B %d, %Y')}\n"
     for symbol in WATCHLIST[:6]:
         quote = get_stock_quote(symbol)
         if quote and "_error" not in quote:
             context += f"{symbol}: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%)\n"
-    prompt = """3 stock picks for this week.
-For each: ticker, thesis, why this week specifically,
-bull case, bear case, entry range, stop loss, target, sizing.
-Show both sides. Never just hype."""
+
+    prompt = f"""Pick 3 FRESH stock plays for THIS week. Every call must produce completely different picks.
+
+STRICT RULES:
+- Do NOT pick any of these: {exclude}
+- At least 2 picks must come from these sectors this run: {', '.join(focus_sectors)}
+- All 3 picks must be from different industries
+- No mega-cap tech defaults — find names that are actually moving this week
+
+For each of the 3 picks:
+1. Ticker + company name + sector
+2. Why THIS week specifically — the exact catalyst or setup
+3. Bull case: what goes right, upside target
+4. Bear case: what goes wrong, stop loss level
+5. Entry range, position size for a $10K account
+
+Today: {datetime.now().strftime('%B %d, %Y')}"""
+
     skill_prompt = get_skill_prompt("/scout")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
     send_message(chat_id, f"<b>WEEKLY SCOUT</b>\n{datetime.now().strftime('%b %d, %Y')}\n\n" + response)
