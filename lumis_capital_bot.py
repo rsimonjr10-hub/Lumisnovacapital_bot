@@ -6,10 +6,13 @@ Telegram Bot for Market Intelligence
 
 import os
 import re
+import json
 import random
 import requests
 import time
 import logging
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
 from skills import get_skill_prompt
 
@@ -955,10 +958,46 @@ def process_command(chat_id, text):
 
 
 # ─────────────────────────────────────
-# MAIN LOOP
+# WEBHOOK MODE (Railway deployment)
+# ─────────────────────────────────────
+_WEBHOOK_PATH = "/webhook"
+
+class _WebhookHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        if self.path != _WEBHOOK_PATH:
+            self.send_response(404)
+            self.end_headers()
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length)
+        self.send_response(200)
+        self.end_headers()
+        try:
+            update = json.loads(body)
+            threading.Thread(target=_dispatch, args=(update,), daemon=True).start()
+        except Exception as e:
+            log.error(f"Webhook parse error: {e}")
+
+    def log_message(self, *args):
+        pass  # suppress default HTTP access logs
+
+def _dispatch(update):
+    message = update.get("message", {})
+    chat_id = message.get("chat", {}).get("id")
+    text = message.get("text", "")
+    if chat_id and text:
+        log.info(f"Webhook update — chat_id={chat_id} text={text!r}")
+        try:
+            process_command(str(chat_id), text)
+        except Exception as e:
+            log.error(f"Error processing command: {e}")
+
+
+# ─────────────────────────────────────
+# MAIN
 # ─────────────────────────────────────
 def run_bot():
-    log.info("🚀 Lumis Capital Bot starting...")
+    log.info("Lumis Capital Bot starting...")
 
     missing = []
     if not TELEGRAM_TOKEN:    missing.append("TELEGRAM_TOKEN")
@@ -967,60 +1006,93 @@ def run_bot():
     if not ANTHROPIC_API_KEY: missing.append("ANTHROPIC_API_KEY")
 
     if missing:
-        log.error(f"❌ Missing variables: {', '.join(missing)}")
+        log.error(f"Missing variables: {', '.join(missing)}")
         return
 
-    send_message(
-        CHAT_ID,
-        f"<b>Lumis Capital Bot Online</b>\n"
-        f"{datetime.now().strftime('%B %d, %Y | %I:%M %p ET')}\n"
-        f"Type /help for all commands."
-    )
+    railway_domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN")
 
-    log.info("Bot running. Skipping any queued updates from before startup...")
-    offset = None
-
-    # Fast-forward past any updates that arrived before this startup
-    # to avoid replaying old commands after a restart
-    pending = get_updates(timeout=0)
-    if pending.get("ok") and pending.get("result"):
-        offset = pending["result"][-1]["update_id"] + 1
-        log.info(f"Skipped {len(pending['result'])} pending update(s). Starting at offset {offset}.")
-
-    log.info("Listening for new commands...")
-    seen_update_ids = set()
-
-    while True:
+    if railway_domain:
+        # ── Webhook mode ──────────────────────────────────────────
+        # Telegram delivers each update to exactly one endpoint,
+        # eliminating the duplicate-message problem from rolling deploys.
+        webhook_url = f"https://{railway_domain}{_WEBHOOK_PATH}"
+        log.info(f"Registering webhook: {webhook_url}")
         try:
-            updates = get_updates(offset)
-            if updates.get("ok") and updates.get("result"):
-                for update in updates["result"]:
-                    update_id = update["update_id"]
-                    offset = update_id + 1
-
-                    if update_id in seen_update_ids:
-                        log.warning(f"Duplicate update {update_id} — skipping")
-                        continue
-                    seen_update_ids.add(update_id)
-                    if len(seen_update_ids) > 500:
-                        seen_update_ids.clear()
-
-                    message = update.get("message", {})
-                    chat_id = message.get("chat", {}).get("id")
-                    text = message.get("text", "")
-                    if chat_id and text:
-                        log.info(f"Update received — update_id={update_id} chat_id={chat_id} text={text!r}")
-                        process_command(str(chat_id), text)
-                        log.info(f"Update {update_id} fully handled")
-            elif not updates.get("ok"):
-                log.error(f"getUpdates returned non-ok response: {updates}")
-            time.sleep(1)
-        except KeyboardInterrupt:
-            log.info("Bot stopped.")
-            break
+            r = requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook",
+                json={"url": webhook_url, "drop_pending_updates": True},
+                timeout=10,
+            )
+            result = r.json()
+            if result.get("ok"):
+                log.info("Webhook registered successfully.")
+            else:
+                log.error(f"setWebhook failed: {result}")
         except Exception as e:
-            log.error(f"Bot error: {e}")
-            time.sleep(5)
+            log.error(f"setWebhook error: {e}")
+
+        send_message(
+            CHAT_ID,
+            f"<b>Lumis Capital Bot Online</b>\n"
+            f"{datetime.now().strftime('%B %d, %Y | %I:%M %p ET')}\n"
+            f"Type /help for all commands."
+        )
+
+        port = int(os.environ.get("PORT", 8080))
+        server = HTTPServer(("0.0.0.0", port), _WebhookHandler)
+        log.info(f"Webhook server listening on port {port}")
+        server.serve_forever()
+
+    else:
+        # ── Long-polling mode (local dev / no Railway domain) ─────
+        log.info("No RAILWAY_PUBLIC_DOMAIN — using long-polling mode.")
+
+        # Delete any existing webhook so polling works
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook",
+                json={"drop_pending_updates": True},
+                timeout=10,
+            )
+        except Exception:
+            pass
+
+        send_message(
+            CHAT_ID,
+            f"<b>Lumis Capital Bot Online</b>\n"
+            f"{datetime.now().strftime('%B %d, %Y | %I:%M %p ET')}\n"
+            f"Type /help for all commands."
+        )
+
+        offset = None
+        pending = get_updates(timeout=0)
+        if pending.get("ok") and pending.get("result"):
+            offset = pending["result"][-1]["update_id"] + 1
+            log.info(f"Skipped {len(pending['result'])} pending update(s). Starting at offset {offset}.")
+
+        log.info("Listening for new commands...")
+        while True:
+            try:
+                updates = get_updates(offset)
+                if updates.get("ok") and updates.get("result"):
+                    for update in updates["result"]:
+                        update_id = update["update_id"]
+                        offset = update_id + 1
+                        message = update.get("message", {})
+                        chat_id = message.get("chat", {}).get("id")
+                        text = message.get("text", "")
+                        if chat_id and text:
+                            log.info(f"Update {update_id} — chat_id={chat_id} text={text!r}")
+                            process_command(str(chat_id), text)
+                elif not updates.get("ok"):
+                    log.error(f"getUpdates error: {updates}")
+                time.sleep(1)
+            except KeyboardInterrupt:
+                log.info("Bot stopped.")
+                break
+            except Exception as e:
+                log.error(f"Bot error: {e}")
+                time.sleep(5)
 
 
 if __name__ == "__main__":
