@@ -9,12 +9,21 @@ import re
 import json
 import random
 import requests
+import signal
 import time
 import logging
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
 from skills import get_skill_prompt
+
+# Set by SIGTERM/SIGINT — main loop checks this to exit cleanly
+_shutdown = False
+
+def _handle_signal(signum, frame):
+    global _shutdown
+    log.info(f"Signal {signum} received — shutting down cleanly")
+    _shutdown = True
 
 # ─────────────────────────────────────
 # CONFIGURATION — SET IN RAILWAY ENV
@@ -97,7 +106,7 @@ def send_message(chat_id, text):
         return None
 
 
-def get_updates(offset=None, timeout=30):
+def get_updates(offset=None, timeout=8):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
     params = {"timeout": timeout}
     if offset:
@@ -997,7 +1006,11 @@ def _dispatch(update):
 # MAIN
 # ─────────────────────────────────────
 def run_bot():
+    global _shutdown
     log.info("Lumis Capital Bot starting...")
+
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
 
     missing = []
     if not TELEGRAM_TOKEN:    missing.append("TELEGRAM_TOKEN")
@@ -1071,9 +1084,11 @@ def run_bot():
             log.info(f"Skipped {len(pending['result'])} pending update(s). Starting at offset {offset}.")
 
         log.info("Listening for new commands...")
-        while True:
+        while not _shutdown:
             try:
                 updates = get_updates(offset)
+                if _shutdown:
+                    break
                 if updates.get("ok") and updates.get("result"):
                     for update in updates["result"]:
                         update_id = update["update_id"]
@@ -1086,13 +1101,14 @@ def run_bot():
                             process_command(str(chat_id), text)
                 elif not updates.get("ok"):
                     log.error(f"getUpdates error: {updates}")
-                time.sleep(1)
-            except KeyboardInterrupt:
-                log.info("Bot stopped.")
-                break
+                if not _shutdown:
+                    time.sleep(1)
             except Exception as e:
                 log.error(f"Bot error: {e}")
-                time.sleep(5)
+                if not _shutdown:
+                    time.sleep(5)
+
+        log.info("Bot stopped cleanly.")
 
 
 if __name__ == "__main__":
