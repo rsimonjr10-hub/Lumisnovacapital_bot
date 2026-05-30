@@ -59,8 +59,8 @@ CORE RULES:
 
 TONE:
 Professional but direct. Honest over exciting.
-Data-driven. Always end with:
-Not financial advice. Always do your own research."""
+Data-driven. Minimal emoji use — plain text is preferred.
+Always end with: Not financial advice. Always do your own research."""
 
 # ─────────────────────────────────────
 # TICKER VALIDATION HELPER
@@ -87,13 +87,13 @@ def send_message(chat_id, text):
         return None
 
 
-def get_updates(offset=None):
+def get_updates(offset=None, timeout=30):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
-    params = {"timeout": 30}
+    params = {"timeout": timeout}
     if offset:
         params["offset"] = offset
     try:
-        response = requests.get(url, params=params, timeout=35)
+        response = requests.get(url, params=params, timeout=timeout + 5)
         return response.json()
     except Exception as e:
         log.error(f"Get updates error: {e}")
@@ -312,10 +312,8 @@ def ask_claude(prompt, context="", skill_prompt=None):
 # COMMAND HANDLERS
 # ─────────────────────────────────────
 def handle_start(chat_id):
-    msg = """⚡ <b>LUMIS CAPITAL BOT</b>
+    msg = """<b>LUMIS CAPITAL BOT</b>
 Powered by Lumis Nova AI
-
-Your personal market intelligence system.
 
 <b>Commands:</b>
 /news — Market stories
@@ -344,9 +342,9 @@ Your personal market intelligence system.
 
 
 def handle_watchlist(chat_id):
-    send_message(chat_id, "⏳ Pulling live prices...")
-    lines = ["📊 <b>LUMIS CAPITAL WATCHLIST</b>"]
-    lines.append(f"🕐 {datetime.now().strftime('%b %d %Y | %I:%M %p ET')}\n")
+    send_message(chat_id, "Pulling live prices...")
+    lines = ["<b>LUMIS CAPITAL WATCHLIST</b>"]
+    lines.append(f"{datetime.now().strftime('%b %d %Y | %I:%M %p ET')}\n")
 
     price_context = ""
     fmp_error_shown = False
@@ -356,18 +354,17 @@ def handle_watchlist(chat_id):
             if not fmp_error_shown:
                 lines.append(quote["_error"])
                 fmp_error_shown = True
-            lines.append(f"⚪ {symbol}: Unavailable")
+            lines.append(f"  {symbol}: Unavailable")
         elif quote:
             price = quote.get("price", 0)
             change = quote.get("changePercentage", 0)
-            emoji = "🟢" if change >= 0 else "🔴"
-            lines.append(f"{emoji} <b>{symbol}</b>: ${price:.2f} ({change:+.2f}%)")
+            arrow = "▲" if change >= 0 else "▼"
+            lines.append(f"{arrow} <b>{symbol}</b>: ${price:.2f} ({change:+.2f}%)")
             price_context += f"{symbol}: ${price:.2f} ({change:+.2f}%)\n"
         else:
-            lines.append(f"⚪ {symbol}: Unavailable")
+            lines.append(f"  {symbol}: Unavailable")
 
-    lines.append("\n<i>Source: FMP Live ✅</i>")
-    send_message(chat_id, "\n".join(lines))
+    lines.append("\n<i>Source: FMP Live</i>")
 
     if price_context:
         prompt = f"""Brief market read on today's watchlist price action.
@@ -375,28 +372,29 @@ Today: {datetime.now().strftime('%B %d, %Y')}
 {price_context}"""
         skill_prompt = get_skill_prompt("/watchlist")
         commentary = ask_claude(prompt, skill_prompt=skill_prompt)
-        send_message(chat_id, "📝 <b>LUMIS NOVA READ</b>\n\n" + commentary)
+        lines.append(f"\n<b>LUMIS NOVA READ</b>\n\n{commentary}")
+
+    send_message(chat_id, "\n".join(lines))
 
 
 def handle_yields(chat_id):
-    send_message(chat_id, "⏳ Pulling yield curve...")
+    send_message(chat_id, "Pulling yield curve...")
     rates = get_treasury_rates()
     if rates and "_error" in rates:
         send_message(chat_id, rates["_error"])
         return
     if rates:
-        msg = f"""📈 <b>TREASURY YIELD CURVE</b>
-🕐 {datetime.now().strftime('%b %d %Y')}
-
-3-month: {rates.get('month3', 'N/A')}%
-6-month: {rates.get('month6', 'N/A')}%
-2-year:  {rates.get('year2', 'N/A')}%
-5-year:  {rates.get('year5', 'N/A')}%
-10-year: {rates.get('year10', 'N/A')}% ← KEY
-30-year: {rates.get('year30', 'N/A')}%
-
-<i>Source: FMP Live ✅</i>"""
-        send_message(chat_id, msg)
+        lines = [
+            f"<b>TREASURY YIELD CURVE</b>",
+            f"{datetime.now().strftime('%b %d %Y')}\n",
+            f"3-month: {rates.get('month3', 'N/A')}%",
+            f"6-month: {rates.get('month6', 'N/A')}%",
+            f"2-year:  {rates.get('year2', 'N/A')}%",
+            f"5-year:  {rates.get('year5', 'N/A')}%",
+            f"10-year: {rates.get('year10', 'N/A')}% <- KEY",
+            f"30-year: {rates.get('year30', 'N/A')}%",
+            "\n<i>Source: FMP Live</i>",
+        ]
         context = (
             f"2yr: {rates.get('year2','N/A')}% | "
             f"10yr: {rates.get('year10','N/A')}% | "
@@ -407,13 +405,14 @@ Today: {datetime.now().strftime('%B %d, %Y')}
 {context}"""
         skill_prompt = get_skill_prompt("/yields")
         commentary = ask_claude(prompt, skill_prompt=skill_prompt)
-        send_message(chat_id, "📝 <b>YIELD CURVE ANALYSIS</b>\n\n" + commentary)
+        lines.append(f"\n<b>YIELD CURVE ANALYSIS</b>\n\n{commentary}")
+        send_message(chat_id, "\n".join(lines))
     else:
-        send_message(chat_id, "⚠️ Unable to fetch yield data. Try again shortly.")
+        send_message(chat_id, "Unable to fetch yield data. Try again shortly.")
 
 
 def handle_earnings(chat_id):
-    send_message(chat_id, "⏳ Pulling earnings calendar...")
+    send_message(chat_id, "Pulling earnings calendar...")
     major = [
         "AAPL","MSFT","NVDA","META","GOOGL","AMZN","TSLA",
         "NOW","MU","AVGO","CRM","DELL","COST","HOOD","SOFI",
@@ -427,7 +426,7 @@ def handle_earnings(chat_id):
     filtered = [e for e in earnings if e.get("symbol") in major]
 
     if filtered:
-        lines = ["📅 <b>UPCOMING EARNINGS (7 days)</b>\n"]
+        lines = ["<b>UPCOMING EARNINGS (7 days)</b>\n"]
         earnings_context = ""
         for e in sorted(filtered, key=lambda x: x.get("date", ""))[:10]:
             symbol = e.get("symbol", "")
@@ -435,22 +434,22 @@ def handle_earnings(chat_id):
             eps = e.get("epsEstimated", "N/A")
             rev = e.get("revenueEstimated", 0)
             rev_b = f"${rev/1e9:.2f}B" if rev else "N/A"
-            lines.append(f"📌 <b>{symbol}</b> | {date}\n   EPS: {eps} | Rev: {rev_b}")
+            lines.append(f"<b>{symbol}</b> | {date} — EPS: {eps} | Rev: {rev_b}")
             earnings_context += f"{symbol} | {date} | EPS est: {eps} | Rev est: {rev_b}\n"
-        lines.append("\n<i>Source: FMP Live ✅</i>")
-        send_message(chat_id, "\n".join(lines))
+        lines.append("\n<i>Source: FMP Live</i>")
         prompt = f"""Analyze the upcoming earnings events and what they mean for traders.
 Today: {datetime.now().strftime('%B %d, %Y')}
 {earnings_context}"""
         skill_prompt = get_skill_prompt("/earnings")
         commentary = ask_claude(prompt, skill_prompt=skill_prompt)
-        send_message(chat_id, "📝 <b>EARNINGS PREVIEW</b>\n\n" + commentary)
+        lines.append(f"\n<b>EARNINGS PREVIEW</b>\n\n{commentary}")
+        send_message(chat_id, "\n".join(lines))
     else:
-        send_message(chat_id, "📅 No major earnings in next 7 days.")
+        send_message(chat_id, "No major earnings in next 7 days.")
 
 
 def handle_news(chat_id):
-    send_message(chat_id, "⏳ Pulling market news...")
+    send_message(chat_id, "Pulling market news...")
     news = get_stock_news()
     if isinstance(news, dict) and "_error" in news:
         send_message(chat_id, news["_error"])
@@ -460,33 +459,32 @@ def handle_news(chat_id):
         for item in news[:8]:
             context += f"- [{item.get('symbol','')}] {item.get('title','')}\n"
         prompt = f"""Give a morning market intelligence brief.
-Top 5 stories. Format for Telegram. Use emojis.
-2-3 sentences per story. Today: {datetime.now().strftime('%B %d, %Y')}
+Top 5 stories. 2-3 sentences per story. Format for Telegram HTML.
+Today: {datetime.now().strftime('%B %d, %Y')}
 {context}"""
         skill_prompt = get_skill_prompt("/news")
         response = ask_claude(prompt, skill_prompt=skill_prompt)
-        header = f"📰 <b>LUMIS CAPITAL NEWS</b>\n🕐 {datetime.now().strftime('%b %d | %I:%M %p ET')}\n\n"
+        header = f"<b>LUMIS CAPITAL NEWS</b>\n{datetime.now().strftime('%b %d | %I:%M %p ET')}\n\n"
         send_message(chat_id, header + response)
     else:
         send_message(chat_id, "⚠️ Unable to fetch news. Try again shortly.")
 
 
 def handle_macro(chat_id):
-    send_message(chat_id, "⏳ Pulling macro data...")
+    send_message(chat_id, "Pulling macro data...")
     rates = get_treasury_rates()
     context = ""
     if rates and "_error" in rates:
-        # Non-fatal: proceed without live yield data, note it in context
         context = f"(Live yield data unavailable: {rates['_error']})"
         log.warning(f"Macro handler: FMP treasury error — {rates['_error']}")
     elif rates:
         context = f"10yr: {rates.get('year10')}% | 2yr: {rates.get('year2')}% | 30yr: {rates.get('year30')}%"
     prompt = f"""Macro brief for {datetime.now().strftime('%B %d, %Y')}.
 Cover: yield curve, Fed outlook, key events today, oil/geopolitical impact.
-Format for Telegram. Keep it actionable. {context}"""
+Format for Telegram HTML. Keep it actionable. {context}"""
     skill_prompt = get_skill_prompt("/macro")
     response = ask_claude(prompt, skill_prompt=skill_prompt)
-    header = f"📊 <b>MACRO BRIEF</b>\n🕐 {datetime.now().strftime('%b %d | %I:%M %p ET')}\n\n"
+    header = f"<b>MACRO BRIEF</b>\n{datetime.now().strftime('%b %d | %I:%M %p ET')}\n\n"
     send_message(chat_id, header + response)
 
 
@@ -498,7 +496,7 @@ def handle_full(chat_id, symbol):
     if not _valid_ticker(symbol):
         send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>. Use 1–5 uppercase letters (e.g. NVDA, AAPL).")
         return
-    send_message(chat_id, f"⏳ Full analysis on ${symbol}...")
+    send_message(chat_id, f"Running full analysis on {symbol}...")
     quote = get_stock_quote(symbol)
     consensus = get_analyst_consensus(symbol)
     context = f"${symbol} live data:\n"
@@ -522,7 +520,7 @@ bull case, bear case, valuation, entry strategy, stop loss, sizing.
 Today: {datetime.now().strftime('%B %d, %Y')}"""
     skill_prompt = get_skill_prompt("/full")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"🔍 <b>${symbol} ANALYSIS</b>\n\n" + response)
+    send_message(chat_id, f"<b>{symbol} ANALYSIS</b>\n\n" + response)
 
 
 def handle_opinion(chat_id, symbol):
@@ -542,11 +540,11 @@ def handle_opinion(chat_id, symbol):
     prompt = f"Quick honest opinion on ${symbol}. Buy/sell/hold and why. 4-5 sentences. One key risk. One key catalyst."
     skill_prompt = get_skill_prompt("/opinion")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"💬 <b>${symbol} QUICK TAKE</b>\n\n" + response)
+    send_message(chat_id, f"<b>{symbol} QUICK TAKE</b>\n\n" + response)
 
 
 def handle_scout(chat_id):
-    send_message(chat_id, "⏳ Running weekly scout...")
+    send_message(chat_id, "Running weekly scout...")
     context = f"Weekly scout {datetime.now().strftime('%B %d, %Y')}\n"
     for symbol in WATCHLIST[:6]:
         quote = get_stock_quote(symbol)
@@ -558,7 +556,7 @@ bull case, bear case, entry range, stop loss, target, sizing.
 Show both sides. Never just hype."""
     skill_prompt = get_skill_prompt("/scout")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"🔭 <b>WEEKLY SCOUT</b>\n🕐 {datetime.now().strftime('%b %d, %Y')}\n\n" + response)
+    send_message(chat_id, f"<b>WEEKLY SCOUT</b>\n{datetime.now().strftime('%b %d, %Y')}\n\n" + response)
 
 
 def handle_invest(chat_id, symbol):
@@ -569,7 +567,7 @@ def handle_invest(chat_id, symbol):
     if not _valid_ticker(symbol):
         send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>. Use 1–5 uppercase letters (e.g. GOOGL, MSFT).")
         return
-    send_message(chat_id, f"⏳ Long-term analysis on ${symbol}...")
+    send_message(chat_id, f"Running long-term analysis on {symbol}...")
     quote = get_stock_quote(symbol)
     consensus = get_analyst_consensus(symbol)
     context = ""
@@ -592,7 +590,7 @@ how to build the position, stop loss.
 Think years not weeks."""
     skill_prompt = get_skill_prompt("/invest")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"💼 <b>${symbol} INVESTING VIEW</b>\n\n" + response)
+    send_message(chat_id, f"<b>{symbol} INVESTING VIEW</b>\n\n" + response)
 
 
 def handle_insider(chat_id, symbol):
@@ -603,14 +601,14 @@ def handle_insider(chat_id, symbol):
     if not _valid_ticker(symbol):
         send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>. Use 1–5 uppercase letters (e.g. NOW, NVDA).")
         return
-    send_message(chat_id, f"⏳ Checking insider activity for ${symbol}...")
+    send_message(chat_id, f"Checking insider activity for {symbol}...")
     prompt = f"""Check insider trading activity for ${symbol}.
 Cover: recent buys, recent sells, net sentiment,
 CEO ownership %, what the activity signals.
 Today: {datetime.now().strftime('%B %d, %Y')}"""
     skill_prompt = get_skill_prompt("/insider")
     response = ask_claude(prompt, skill_prompt=skill_prompt)
-    send_message(chat_id, f"👁️ <b>${symbol} INSIDER ACTIVITY</b>\n\n" + response)
+    send_message(chat_id, f"<b>{symbol} INSIDER ACTIVITY</b>\n\n" + response)
 
 
 def handle_risk(chat_id, symbol):
@@ -621,7 +619,7 @@ def handle_risk(chat_id, symbol):
     if not _valid_ticker(symbol):
         send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>. Use 1–5 uppercase letters (e.g. NOW, ASTS).")
         return
-    send_message(chat_id, f"⏳ Running risk check for ${symbol}...")
+    send_message(chat_id, f"Running risk check for {symbol}...")
     quote = get_stock_quote(symbol)
     context = ""
     if quote and "_error" in quote:
@@ -634,7 +632,7 @@ max loss at stop, correlation risk, Kelly criterion suggestion.
 Be honest. Push back if sizing seems aggressive."""
     skill_prompt = get_skill_prompt("/risk")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"⚠️ <b>${symbol} RISK CHECK</b>\n\n" + response)
+    send_message(chat_id, f"<b>{symbol} RISK CHECK</b>\n\n" + response)
 
 
 def handle_compounding(chat_id):
@@ -644,19 +642,19 @@ Then show covered call income overlay: $300/month reinvested.
 Make it real and motivating."""
     skill_prompt = get_skill_prompt("/compounding")
     response = ask_claude(prompt, skill_prompt=skill_prompt)
-    send_message(chat_id, "📈 <b>COMPOUNDING MATH</b>\n\n" + response)
+    send_message(chat_id, "<b>COMPOUNDING MATH</b>\n\n" + response)
 
 
 def handle_help(chat_id):
-    msg = """⚡ <b>LUMIS CAPITAL — ALL COMMANDS</b>
+    msg = """<b>LUMIS CAPITAL — ALL COMMANDS</b>
 
-📰 <b>Intelligence:</b>
+<b>Intelligence:</b>
 /news — Market stories
 /macro — Yields + economic data
 /earnings — Upcoming calendar
 /yields — Treasury curve
 
-🔍 <b>Research:</b>
+<b>Research:</b>
 /full [TICKER] — Complete analysis
 /opinion [TICKER] — Quick take
 /scout — Weekly picks
@@ -665,18 +663,18 @@ def handle_help(chat_id):
 /sector [SECTOR] — Sector analysis
 /compare [T1] [T2] — Compare two stocks
 
-💼 <b>Investing:</b>
+<b>Investing:</b>
 /invest [TICKER] — Long-term analysis
 /compounding — Wealth building math
 /dividend [TICKER] — Dividend analysis
 
-📊 <b>Portfolio:</b>
+<b>Portfolio:</b>
 /watchlist — Live prices
 /price [TICKER] — Live quote (no AI)
 /momentum — Momentum plays
 /portfolio [ALLOCATION] — Portfolio review
 
-🛠️ <b>Utility:</b>
+<b>Utility:</b>
 /test — Check all API connections
 
 <b>Examples:</b>
@@ -693,13 +691,13 @@ def handle_sector(chat_id, sector):
     if not sector:
         send_message(chat_id, "❌ Usage: /sector tech\nExamples: /sector energy | /sector healthcare | /sector fintech")
         return
-    send_message(chat_id, f"⏳ Analyzing {sector} sector...")
+    send_message(chat_id, f"Analyzing {sector} sector...")
     prompt = f"""Sector analysis for the {sector} sector.
 Today: {datetime.now().strftime('%B %d, %Y')}
 Cover: key drivers, top stocks, ETF performance, bull case, bear case, positioning."""
     skill_prompt = get_skill_prompt("/sector")
     response = ask_claude(prompt, skill_prompt=skill_prompt)
-    send_message(chat_id, f"🏭 <b>{sector.upper()} SECTOR ANALYSIS</b>\n\n" + response)
+    send_message(chat_id, f"<b>{sector.upper()} SECTOR ANALYSIS</b>\n\n" + response)
 
 
 def handle_compare(chat_id, ticker1, ticker2):
@@ -714,7 +712,7 @@ def handle_compare(chat_id, ticker1, ticker2):
     if not _valid_ticker(ticker2):
         send_message(chat_id, f"❌ Invalid ticker: <b>{ticker2}</b>. Use 1–5 uppercase letters.")
         return
-    send_message(chat_id, f"⏳ Comparing ${ticker1} vs ${ticker2}...")
+    send_message(chat_id, f"Comparing {ticker1} vs {ticker2}...")
     quote1 = get_stock_quote(ticker1)
     quote2 = get_stock_quote(ticker2)
     context = ""
@@ -734,7 +732,7 @@ Cover: business model, valuation, growth, moat, bull case and bear case for each
 Today: {datetime.now().strftime('%B %d, %Y')}"""
     skill_prompt = get_skill_prompt("/compare")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"⚔️ <b>${ticker1} vs ${ticker2}</b>\n\n" + response)
+    send_message(chat_id, f"<b>{ticker1} vs {ticker2}</b>\n\n" + response)
 
 
 def handle_dividend(chat_id, symbol):
@@ -745,7 +743,7 @@ def handle_dividend(chat_id, symbol):
     if not _valid_ticker(symbol):
         send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>. Use 1–5 uppercase letters (e.g. AAPL, KO).")
         return
-    send_message(chat_id, f"⏳ Analyzing ${symbol} dividend...")
+    send_message(chat_id, f"Analyzing {symbol} dividend...")
     quote = get_stock_quote(symbol)
     context = ""
     if quote and "_error" in quote:
@@ -757,11 +755,11 @@ Cover: yield, payout history, sustainability, FCF coverage, bull case, bear case
 Today: {datetime.now().strftime('%B %d, %Y')}"""
     skill_prompt = get_skill_prompt("/dividend")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"💰 <b>${symbol} DIVIDEND ANALYSIS</b>\n\n" + response)
+    send_message(chat_id, f"<b>{symbol} DIVIDEND ANALYSIS</b>\n\n" + response)
 
 
 def handle_momentum(chat_id):
-    send_message(chat_id, "⏳ Scanning for momentum plays...")
+    send_message(chat_id, "Scanning for momentum plays...")
     context = f"Momentum scan {datetime.now().strftime('%B %d, %Y')}\n"
     for symbol in WATCHLIST:
         quote = get_stock_quote(symbol)
@@ -772,20 +770,20 @@ Cover: price action, key levels, bull case (continuation), bear case (reversal),
 Today: {datetime.now().strftime('%B %d, %Y')}"""
     skill_prompt = get_skill_prompt("/momentum")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"🚀 <b>MOMENTUM PLAYS</b>\n🕐 {datetime.now().strftime('%b %d, %Y')}\n\n" + response)
+    send_message(chat_id, f"<b>MOMENTUM PLAYS</b>\n{datetime.now().strftime('%b %d, %Y')}\n\n" + response)
 
 
 def handle_portfolio(chat_id, allocation):
     if not allocation:
         send_message(chat_id, "❌ Usage: /portfolio NVDA:30 AAPL:20 CASH:50\nList holdings as TICKER:PERCENT separated by spaces.")
         return
-    send_message(chat_id, "⏳ Reviewing your portfolio allocation...")
+    send_message(chat_id, "Reviewing your portfolio allocation...")
     prompt = f"""Portfolio review for the following allocation: {allocation}
 Cover: composition, diversification, risk assessment, bull case, bear case, rebalancing suggestions.
 Today: {datetime.now().strftime('%B %d, %Y')}"""
     skill_prompt = get_skill_prompt("/portfolio")
     response = ask_claude(prompt, skill_prompt=skill_prompt)
-    send_message(chat_id, "📊 <b>PORTFOLIO REVIEW</b>\n\n" + response)
+    send_message(chat_id, "<b>PORTFOLIO REVIEW</b>\n\n" + response)
 
 
 def handle_price(chat_id, symbol):
@@ -802,7 +800,7 @@ def handle_price(chat_id, symbol):
 
 def handle_test(chat_id):
     """Validate all three API connections and report status."""
-    send_message(chat_id, "🛠️ <b>API CONNECTION TEST</b>\nChecking FMP, Claude, and Telegram...\n")
+    send_message(chat_id, "<b>API CONNECTION TEST</b>\nChecking FMP, Claude, and Telegram...\n")
     results = []
 
     # ── 1. Telegram ──────────────────────────────────────────────
@@ -863,7 +861,7 @@ def handle_test(chat_id):
         results.append(f"❌ <b>Claude API</b>: Exception — {e}")
 
     status_line = "✅ All systems operational" if all(r.startswith("✅") for r in results) else "⚠️ One or more issues detected"
-    msg = "\n".join(results) + f"\n\n{status_line}\n🕐 {datetime.now().strftime('%b %d %Y | %I:%M %p ET')}"
+    msg = "\n".join(results) + f"\n\n{status_line}\n{datetime.now().strftime('%b %d %Y | %I:%M %p ET')}"
     send_message(chat_id, msg)
 
 
@@ -940,13 +938,22 @@ def run_bot():
 
     send_message(
         CHAT_ID,
-        f"⚡ <b>Lumis Capital Bot Online</b>\n"
-        f"🕐 {datetime.now().strftime('%B %d, %Y | %I:%M %p ET')}\n"
+        f"<b>Lumis Capital Bot Online</b>\n"
+        f"{datetime.now().strftime('%B %d, %Y | %I:%M %p ET')}\n"
         f"Type /help for all commands."
     )
 
-    log.info("✅ Bot running. Listening for commands...")
+    log.info("Bot running. Skipping any queued updates from before startup...")
     offset = None
+
+    # Fast-forward past any updates that arrived before this startup
+    # to avoid replaying old commands after a restart
+    pending = get_updates(timeout=0)
+    if pending.get("ok") and pending.get("result"):
+        offset = pending["result"][-1]["update_id"] + 1
+        log.info(f"Skipped {len(pending['result'])} pending update(s). Starting at offset {offset}.")
+
+    log.info("Listening for new commands...")
 
     while True:
         try:
