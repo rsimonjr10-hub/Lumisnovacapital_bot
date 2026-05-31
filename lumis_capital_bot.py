@@ -971,25 +971,54 @@ def process_command(chat_id, text):
 # WEBHOOK MODE (Railway deployment)
 # ─────────────────────────────────────
 _WEBHOOK_PATH = "/webhook"
+_ARGUS_PATH   = "/argus"
+
+# In-memory ticket status store  {ticket_id: "IN PROGRESS" | "DONE" | "BLOCKED: ..."}
+_ticket_status = {}
 
 class _WebhookHandler(BaseHTTPRequestHandler):
     def do_POST(self):
-        if self.path != _WEBHOOK_PATH:
-            self.send_response(404)
-            self.end_headers()
-            return
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length)
-        self.send_response(200)
-        self.end_headers()
-        try:
-            update = json.loads(body)
-            threading.Thread(target=_dispatch, args=(update,), daemon=True).start()
-        except Exception as e:
-            log.error(f"Webhook parse error: {e}")
+
+        if self.path == _WEBHOOK_PATH:
+            self.send_response(200)
+            self.end_headers()
+            try:
+                update = json.loads(body)
+                threading.Thread(target=_dispatch, args=(update,), daemon=True).start()
+            except Exception as e:
+                log.error(f"Webhook parse error: {e}")
+
+        elif self.path == _ARGUS_PATH:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            try:
+                payload = json.loads(body)
+                threading.Thread(target=_starfire_dispatch, args=(payload,), daemon=True).start()
+                self.wfile.write(json.dumps({"status": "received"}).encode())
+            except Exception as e:
+                log.error(f"Argus parse error: {e}")
+                self.wfile.write(json.dumps({"status": "error", "detail": str(e)}).encode())
+
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_GET(self):
+        if self.path == "/":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"LUMISNOVA ONLINE | Argus Tower: /argus | Telegram: /webhook")
+        else:
+            self.send_response(404)
+            self.end_headers()
 
     def log_message(self, *args):
-        pass  # suppress default HTTP access logs
+        pass
+
 
 def _dispatch(update):
     message = update.get("message", {})
@@ -1001,6 +1030,219 @@ def _dispatch(update):
             process_command(str(chat_id), text)
         except Exception as e:
             log.error(f"Error processing command: {e}")
+
+
+# ─────────────────────────────────────
+# STARFIRE / ARGUS TOWER DISPATCHER
+# ─────────────────────────────────────
+def _starfire_dispatch(payload):
+    command = payload.get("command", "")
+    data    = payload.get("data", payload)  # support flat or nested payload
+
+    if command == "LUMISNOVA_TICKET":
+        _handle_ticket(data)
+    elif command == "LUMISNOVA_REQUEST":
+        _handle_direct_request(data)
+    elif command == "LUMISNOVA_TICKET_STATUS":
+        _handle_ticket_status(data)
+    else:
+        # Try to infer from keys if command field is missing
+        if "ticket_id" in data and "description" in data:
+            _handle_ticket(data)
+        elif "message" in data:
+            _handle_direct_request(data)
+        else:
+            log.warning(f"STARFIRE: unrecognised command payload: {payload}")
+
+
+def _handle_ticket(data):
+    ticket_id   = data.get("ticket_id")
+    title       = data.get("title", "Unknown")
+    description = data.get("description", "")
+    recipients  = data.get("route_reply_to", [CHAT_ID])
+
+    _ticket_status[ticket_id] = "IN PROGRESS"
+    log.info(f"STARFIRE Ticket #{ticket_id} — {title}")
+
+    # Acknowledge
+    ack = f"LUMISNOVA — Ticket #{ticket_id} received. Pulling: {title}"
+    for uid in recipients:
+        send_message(str(uid), ack)
+
+    # Execute
+    result = _execute_starfire_task(description)
+
+    # Deliver
+    for uid in recipients:
+        send_message(str(uid), f"<b>Ticket #{ticket_id} — {title}</b>\n\n{result}")
+        send_message(str(uid), f"LUMISNOVA — Ticket #{ticket_id} DONE. Report delivered.")
+
+    _ticket_status[ticket_id] = "DONE"
+
+
+def _handle_direct_request(data):
+    message    = data.get("message", "")
+    recipients = data.get("route_reply_to", [CHAT_ID])
+    log.info(f"STARFIRE direct request: {message}")
+    result = _execute_starfire_task(message)
+    for uid in recipients:
+        send_message(str(uid), result)
+
+
+def _handle_ticket_status(data):
+    ticket_ids = data.get("ticket_ids", [])
+    recipients = data.get("route_reply_to", [CHAT_ID])
+    lines = []
+    for tid in ticket_ids:
+        status = _ticket_status.get(tid, "UNKNOWN — no record of this ticket")
+        lines.append(f"Ticket #{tid}: {status}")
+    report = "LUMISNOVA — Ticket Status\n\n" + "\n".join(lines)
+    for uid in recipients:
+        send_message(str(uid), report)
+
+
+def _execute_starfire_task(description):
+    """
+    Map a natural-language task description to the right data handler.
+    Tries to detect ticker + command type; falls back to Claude.
+    """
+    desc_upper = description.upper()
+
+    # Extract ticker if present (first 1-5 uppercase-letter word after common keywords)
+    import re as _re
+    ticker_match = _re.search(
+        r'\b(?:FOR|ON|REPORT ON|ANALYZE|PRICE OF|QUOTE FOR|FULL|OPINION ON|INVEST IN|DIVIDEND FOR|INSIDER|RISK ON|COMPARE)?\s*([A-Z]{1,5})\b',
+        desc_upper
+    )
+    ticker = ticker_match.group(1) if ticker_match else None
+
+    # Route to the right handler based on keywords
+    if ticker and any(k in desc_upper for k in ["FULL REPORT", "FULL ANALYSIS", "COMPLETE ANALYSIS", "DEEP DIVE"]):
+        return _starfire_full(ticker)
+    if ticker and any(k in desc_upper for k in ["PRICE", "QUOTE", "CURRENT PRICE"]):
+        return get_stock_price_only(ticker)
+    if ticker and any(k in desc_upper for k in ["OPINION", "QUICK TAKE", "BUY OR SELL", "BUY/SELL"]):
+        return _starfire_opinion(ticker)
+    if ticker and "INVEST" in desc_upper:
+        return _starfire_invest(ticker)
+    if ticker and "DIVIDEND" in desc_upper:
+        return _starfire_dividend(ticker)
+    if ticker and "INSIDER" in desc_upper:
+        return _starfire_insider(ticker)
+    if ticker and "RISK" in desc_upper:
+        return _starfire_risk(ticker)
+    if any(k in desc_upper for k in ["YIELD", "TREASURY", "RATES"]):
+        return _starfire_yields()
+    if any(k in desc_upper for k in ["EARNINGS", "CALENDAR"]):
+        return _starfire_earnings_brief()
+    if any(k in desc_upper for k in ["NEWS", "HEADLINES"]):
+        return _starfire_news_brief()
+    if any(k in desc_upper for k in ["MACRO", "FED", "ECONOMY"]):
+        return _starfire_macro_brief()
+    if any(k in desc_upper for k in ["SCOUT", "PICKS", "STOCK PICKS"]):
+        return _starfire_scout()
+    if ticker and any(k in desc_upper for k in ["WATCHLIST", "PRICES"]):
+        return _starfire_watchlist()
+
+    # Fallback — pass directly to Claude as a financial data request
+    return ask_claude(
+        description,
+        f"STARFIRE data request. Today: {datetime.now().strftime('%B %d, %Y')}",
+        skill_prompt=get_skill_prompt("/full")
+    )
+
+
+# ── Starfire sub-handlers (lightweight wrappers around FMP + Claude) ──
+
+def _starfire_full(ticker):
+    quote = get_stock_quote(ticker)
+    consensus = get_analyst_consensus(ticker)
+    context = f"{ticker} live data:\n"
+    if quote and "_error" not in quote:
+        context += f"Price: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%)\n"
+        context += f"52wk High: ${quote.get('yearHigh','N/A')} | Low: ${quote.get('yearLow','N/A')}\n"
+        context += f"Market Cap: ${quote.get('marketCap',0)/1e9:.2f}B\n"
+    if consensus and "_error" not in consensus:
+        context += f"Analyst PT: ${consensus.get('targetConsensus','N/A')}\n"
+    prompt = f"Full stock analysis for {ticker}. Today: {datetime.now().strftime('%B %d, %Y')}"
+    return ask_claude(prompt, context, skill_prompt=get_skill_prompt("/full"))
+
+def _starfire_opinion(ticker):
+    quote = get_stock_quote(ticker)
+    context = ""
+    if quote and "_error" not in quote:
+        context = f"{ticker}: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%)"
+    return ask_claude(f"Quick opinion on {ticker}. Buy/sell/hold and why.", context, skill_prompt=get_skill_prompt("/opinion"))
+
+def _starfire_invest(ticker):
+    quote = get_stock_quote(ticker)
+    context = ""
+    if quote and "_error" not in quote:
+        context = f"{ticker}: ${quote.get('price','N/A')} | Cap: ${quote.get('marketCap',0)/1e9:.2f}B"
+    return ask_claude(f"Long-term investing analysis for {ticker}.", context, skill_prompt=get_skill_prompt("/invest"))
+
+def _starfire_dividend(ticker):
+    quote = get_stock_quote(ticker)
+    context = ""
+    if quote and "_error" not in quote:
+        context = f"{ticker}: ${quote.get('price','N/A')}"
+    return ask_claude(f"Dividend analysis for {ticker}. Today: {datetime.now().strftime('%B %d, %Y')}", context, skill_prompt=get_skill_prompt("/dividend"))
+
+def _starfire_insider(ticker):
+    return ask_claude(f"Insider trading analysis for {ticker}. Today: {datetime.now().strftime('%B %d, %Y')}", skill_prompt=get_skill_prompt("/insider"))
+
+def _starfire_risk(ticker):
+    quote = get_stock_quote(ticker)
+    context = f"{ticker}: ${quote.get('price','N/A')}" if quote and "_error" not in quote else ""
+    return ask_claude(f"Risk check for {ticker}.", context, skill_prompt=get_skill_prompt("/risk"))
+
+def _starfire_yields():
+    rates = get_treasury_rates()
+    if not rates or "_error" in rates:
+        return "Treasury data unavailable."
+    context = f"2yr: {rates.get('year2','N/A')}% | 10yr: {rates.get('year10','N/A')}% | 30yr: {rates.get('year30','N/A')}%"
+    return ask_claude(f"Yield curve analysis. Today: {datetime.now().strftime('%B %d, %Y')} {context}", skill_prompt=get_skill_prompt("/yields"))
+
+def _starfire_earnings_brief():
+    earnings = get_earnings_calendar()
+    if not earnings or isinstance(earnings, dict):
+        return "Earnings data unavailable."
+    major = ["AAPL","MSFT","NVDA","META","GOOGL","AMZN","TSLA","NOW","MU","HOOD","SOFI","IREN","ASTS","AMD","INTC"]
+    filtered = [e for e in earnings if e.get("symbol") in major][:8]
+    context = "\n".join(f"{e['symbol']} | {e.get('date','')} | EPS est: {e.get('epsEstimated','N/A')}" for e in filtered)
+    return ask_claude(f"Earnings preview. Today: {datetime.now().strftime('%B %d, %Y')}\n{context}", skill_prompt=get_skill_prompt("/earnings"))
+
+def _starfire_news_brief():
+    news = get_stock_news()
+    if not news or isinstance(news, dict):
+        return "News data unavailable."
+    context = "\n".join(f"[{n.get('symbol','')}] {n.get('title','')}" for n in news[:8])
+    return ask_claude(f"Market news brief. Today: {datetime.now().strftime('%B %d, %Y')}\n{context}", skill_prompt=get_skill_prompt("/news"))
+
+def _starfire_macro_brief():
+    rates = get_treasury_rates()
+    context = ""
+    if rates and "_error" not in rates:
+        context = f"10yr: {rates.get('year10')}% | 2yr: {rates.get('year2')}% | 30yr: {rates.get('year30')}%"
+    return ask_claude(f"Macro brief. Today: {datetime.now().strftime('%B %d, %Y')}. {context}", skill_prompt=get_skill_prompt("/macro"))
+
+def _starfire_scout():
+    focus_sectors = random.sample(_SCOUT_SECTORS, 2)
+    exclude = ", ".join(WATCHLIST)
+    context = f"Scout run {datetime.now().strftime('%B %d, %Y')}"
+    prompt = f"3 fresh stock picks. Do NOT pick: {exclude}. At least 2 from: {', '.join(focus_sectors)}. All different sectors."
+    return ask_claude(prompt, context, skill_prompt=get_skill_prompt("/scout"))
+
+def _starfire_watchlist():
+    lines = []
+    for symbol in WATCHLIST:
+        quote = get_stock_quote(symbol)
+        if quote and "_error" not in quote:
+            price = quote.get("price", 0)
+            change = quote.get("changePercentage", 0)
+            arrow = "▲" if change >= 0 else "▼"
+            lines.append(f"{arrow} {symbol}: ${price:.2f} ({change:+.2f}%)")
+    return "\n".join(lines) if lines else "Watchlist data unavailable."
 
 
 # ─────────────────────────────────────
