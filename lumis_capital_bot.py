@@ -472,6 +472,240 @@ def get_analyst_consensus(symbol):
 
 
 # ─────────────────────────────────────
+# FMP EXTENDED DATA LAYER
+# ─────────────────────────────────────
+_FMP_BASE = "https://financialmodelingprep.com/stable"
+
+def _fmp_get(endpoint, params=None, label="", list_index=0):
+    """Generic FMP GET. Returns data[list_index] if list, raw dict otherwise, or None on error."""
+    url = f"{_FMP_BASE}/{endpoint}"
+    p = {"apikey": FMP_API_KEY}
+    if params:
+        p.update(params)
+    try:
+        r = requests.get(url, params=p, timeout=10)
+        if r.status_code != 200:
+            log.warning(f"FMP {endpoint} returned {r.status_code}")
+            return None
+        data = r.json()
+        if isinstance(data, list):
+            return data[list_index] if len(data) > list_index else None
+        return data if data else None
+    except Exception as e:
+        log.error(f"FMP {label or endpoint} error: {e}")
+        return None
+
+
+def get_key_metrics(symbol):
+    return _fmp_get("key-metrics", {"symbol": symbol, "limit": 1}, f"key-metrics/{symbol}")
+
+
+def get_financial_ratios(symbol):
+    return _fmp_get("ratios", {"symbol": symbol, "limit": 1}, f"ratios/{symbol}")
+
+
+def get_income_statement(symbol, period="annual"):
+    return _fmp_get("income-statement", {"symbol": symbol, "period": period, "limit": 1}, f"income/{symbol}")
+
+
+def get_earnings_surprises(symbol):
+    url = f"{_FMP_BASE}/earnings-surprises"
+    try:
+        r = requests.get(url, params={"symbol": symbol, "limit": 4, "apikey": FMP_API_KEY}, timeout=10)
+        if r.status_code == 200:
+            return r.json()[:4]
+        return None
+    except Exception as e:
+        log.error(f"FMP earnings-surprises error: {e}")
+        return None
+
+
+def get_insider_trades(symbol):
+    url = f"{_FMP_BASE}/insider-trading"
+    try:
+        r = requests.get(url, params={"symbol": symbol, "limit": 10, "apikey": FMP_API_KEY}, timeout=10)
+        if r.status_code == 200:
+            return r.json()[:10]
+        return None
+    except Exception as e:
+        log.error(f"FMP insider-trading error: {e}")
+        return None
+
+
+def get_institutional_holders(symbol):
+    url = f"{_FMP_BASE}/institutional-ownership/symbol-ownership"
+    try:
+        r = requests.get(url, params={"symbol": symbol, "limit": 5, "apikey": FMP_API_KEY}, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            return data[:5] if isinstance(data, list) else None
+        return None
+    except Exception as e:
+        log.error(f"FMP institutional-ownership error: {e}")
+        return None
+
+
+def get_sector_performance():
+    url = f"{_FMP_BASE}/sector-performance"
+    try:
+        r = requests.get(url, params={"apikey": FMP_API_KEY}, timeout=10)
+        if r.status_code == 200:
+            return r.json()
+        return None
+    except Exception as e:
+        log.error(f"FMP sector-performance error: {e}")
+        return None
+
+
+def get_etf_holdings(symbol):
+    url = f"{_FMP_BASE}/etf-holdings"
+    try:
+        r = requests.get(url, params={"symbol": symbol, "limit": 10, "apikey": FMP_API_KEY}, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            return data[:10] if isinstance(data, list) else None
+        return None
+    except Exception as e:
+        log.error(f"FMP etf-holdings error: {e}")
+        return None
+
+
+def get_historical_prices(symbol, days=30):
+    end = datetime.now().strftime("%Y-%m-%d")
+    start = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    url = f"{_FMP_BASE}/historical-price-eod/light"
+    try:
+        r = requests.get(url, params={"symbol": symbol, "from": start, "to": end, "apikey": FMP_API_KEY}, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            return data if isinstance(data, list) else None
+        return None
+    except Exception as e:
+        log.error(f"FMP historical-prices error: {e}")
+        return None
+
+
+def get_short_interest(symbol):
+    return _fmp_get("short-interest", {"symbol": symbol}, f"short-interest/{symbol}")
+
+
+def get_analyst_ratings(symbol):
+    url = f"{_FMP_BASE}/analyst-stock-recommendations"
+    try:
+        r = requests.get(url, params={"symbol": symbol, "limit": 5, "apikey": FMP_API_KEY}, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            return data[:5] if isinstance(data, list) else None
+        return None
+    except Exception as e:
+        log.error(f"FMP analyst-recommendations error: {e}")
+        return None
+
+
+def get_crypto_quote(symbol):
+    ticker = symbol.upper()
+    if not ticker.endswith("USD"):
+        ticker = f"{ticker}USD"
+    url = f"{_FMP_BASE}/crypto/quote"
+    try:
+        r = requests.get(url, params={"symbol": ticker, "apikey": FMP_API_KEY}, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            return data[0] if isinstance(data, list) and data else None
+        return None
+    except Exception as e:
+        log.error(f"FMP crypto-quote error: {e}")
+        return None
+
+
+def get_forex_rates(pairs=None):
+    url = f"{_FMP_BASE}/forex-list"
+    try:
+        r = requests.get(url, params={"apikey": FMP_API_KEY}, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            if pairs and isinstance(data, list):
+                return [d for d in data if d.get("ticker", "") in pairs][:8]
+            return data[:8] if isinstance(data, list) else None
+        return None
+    except Exception as e:
+        log.error(f"FMP forex-rates error: {e}")
+        return None
+
+
+def get_commodity_prices():
+    url = f"{_FMP_BASE}/commodities-list"
+    try:
+        r = requests.get(url, params={"apikey": FMP_API_KEY}, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            return data[:12] if isinstance(data, list) else None
+        return None
+    except Exception as e:
+        log.error(f"FMP commodity-prices error: {e}")
+        return None
+
+
+def get_economic_indicators():
+    indicators = {}
+    for name, endpoint in [
+        ("cpi", "economic-indicators/CPI"),
+        ("gdp", "economic-indicators/GDP"),
+        ("unemployment", "economic-indicators/unemployment"),
+        ("fed_funds", "economic-indicators/federalFunds"),
+    ]:
+        data = _fmp_get(endpoint, label=name)
+        if data:
+            indicators[name] = data
+    return indicators if indicators else None
+
+
+def get_ticker_news(symbol, limit=5):
+    url = f"{_FMP_BASE}/stock-news"
+    try:
+        r = requests.get(url, params={"tickers": symbol, "limit": limit, "apikey": FMP_API_KEY}, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            return data[:limit] if isinstance(data, list) else None
+        return None
+    except Exception as e:
+        log.error(f"FMP ticker-news error: {e}")
+        return None
+
+
+def _fmt_fundamentals(symbol, quote=None, metrics=None, ratios=None, consensus=None, income=None):
+    """Build a rich fundamental context string from available FMP data."""
+    parts = []
+    if quote and "_error" not in quote:
+        parts.append(
+            f"{symbol}: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%) | "
+            f"52wk ${quote.get('yearLow','N/A')}–${quote.get('yearHigh','N/A')} | "
+            f"Cap ${quote.get('marketCap',0)/1e9:.1f}B"
+        )
+    if consensus and "_error" not in consensus:
+        parts.append(f"Analyst PT: ${consensus.get('targetConsensus','N/A')} (High ${consensus.get('targetHigh','N/A')} / Low ${consensus.get('targetLow','N/A')})")
+    if metrics:
+        parts.append(
+            f"P/E: {metrics.get('peRatio','N/A')} | EV/EBITDA: {metrics.get('enterpriseValueOverEBITDA','N/A')} | "
+            f"P/S: {metrics.get('priceToSalesRatio','N/A')} | P/B: {metrics.get('pbRatio','N/A')}"
+        )
+    if income:
+        rev = income.get('revenue', 0) or 0
+        ni = income.get('netIncome', 0) or 0
+        gm = income.get('grossProfitRatio', None)
+        parts.append(
+            f"Revenue: ${rev/1e9:.2f}B | Net Income: ${ni/1e9:.2f}B" +
+            (f" | Gross Margin: {gm*100:.1f}%" if gm else "")
+        )
+    if ratios:
+        parts.append(
+            f"ROE: {ratios.get('returnOnEquity','N/A')} | Debt/Eq: {ratios.get('debtEquityRatio','N/A')} | "
+            f"Current Ratio: {ratios.get('currentRatio','N/A')}"
+        )
+    return "\n".join(parts)
+
+
+# ─────────────────────────────────────
 # WEB SEARCH (Google via Serper)
 # ─────────────────────────────────────
 def web_search(query, num_results=5):
@@ -790,35 +1024,39 @@ def handle_full(chat_id, symbol):
     if not _valid_ticker(symbol):
         send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>. Use 1–5 uppercase letters (e.g. NVDA, AAPL).")
         return
-    send_message(chat_id, f"Running full analysis on {symbol}...")
-    quote = get_stock_quote(symbol)
+    send_message(chat_id, f"Pulling data on {symbol}...")
+    # Fetch all available FMP data in parallel-ish sequence
+    quote     = get_stock_quote(symbol)
     consensus = get_analyst_consensus(symbol)
-    context = f"${symbol} live data:\n"
-    data_warnings = []
-    if quote and "_error" in quote:
-        data_warnings.append(quote["_error"])
-    elif quote:
-        context += f"Price: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%)\n"
-        context += f"52wk High: ${quote.get('yearHigh','N/A')} | Low: ${quote.get('yearLow','N/A')}\n"
-        context += f"Market Cap: ${quote.get('marketCap',0)/1e9:.2f}B\n"
-    if consensus and "_error" in consensus:
-        data_warnings.append(consensus["_error"])
-    elif consensus:
-        context += f"Analyst consensus PT: ${consensus.get('targetConsensus','N/A')}\n"
-        context += f"High PT: ${consensus.get('targetHigh','N/A')} | Low: ${consensus.get('targetLow','N/A')}\n"
-    if data_warnings:
-        send_message(chat_id, "\n".join(data_warnings) + "\n<i>Proceeding with available data...</i>")
-    # Enrich with web search
-    search = web_search(f"{symbol} stock analysis news {datetime.now().strftime('%B %Y')}")
+    metrics   = get_key_metrics(symbol)
+    ratios    = get_financial_ratios(symbol)
+    income    = get_income_statement(symbol)
+    ratings   = get_analyst_ratings(symbol)
+    news      = get_ticker_news(symbol, limit=3)
+    surprises = get_earnings_surprises(symbol)
+
+    context = _fmt_fundamentals(symbol, quote, metrics, ratios, consensus, income)
+
+    if ratings:
+        buys = sum(1 for r in ratings if "buy" in str(r.get("analystRatingsStrongBuy", 0) or 0) or r.get("analystRatingsBuy", 0))
+        context += f"\nAnalyst ratings (recent 5): {[r.get('rating','') for r in ratings]}"
+    if surprises:
+        surp_lines = [f"{s.get('date','')}: EPS actual {s.get('actualEarningResult','N/A')} vs est {s.get('estimatedEarning','N/A')}" for s in surprises]
+        context += f"\nEarnings surprises (last 4):\n" + "\n".join(surp_lines)
+    if news:
+        context += "\nRecent news:\n" + "\n".join(f"- {n.get('title','')}" for n in news)
+
+    search = web_search(f"{symbol} stock analysis outlook {datetime.now().strftime('%B %Y')}")
     if search:
-        context += f"\nRecent web data:\n{search}"
-    prompt = f"""Full stock analysis for ${symbol}.
-Cover: business model, moat, top 3 competitors, catalyst,
-bull case, bear case, valuation, entry strategy, stop loss, sizing.
-Today: {datetime.now().strftime('%B %d, %Y')}"""
+        context += f"\nWeb data:\n{search}"
+
+    prompt = (f"Full institutional-quality analysis for ${symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+              f"Cover: business model, moat, top 3 competitors, key catalysts, "
+              f"valuation vs peers, bull case with price target, bear case with downside, "
+              f"entry strategy, stop loss, position sizing for $10K account.")
     skill_prompt = get_skill_prompt("/full")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"<b>{symbol} ANALYSIS</b>\n\n" + response)
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt, max_tokens=2000)
+    send_message(chat_id, f"<b>{symbol} ANALYSIS</b>\n<i>Source: FMP + Web</i>\n\n" + response)
 
 
 def handle_opinion(chat_id, symbol):
@@ -893,20 +1131,12 @@ def handle_invest(chat_id, symbol):
         send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>. Use 1–5 uppercase letters (e.g. GOOGL, MSFT).")
         return
     send_message(chat_id, f"Running long-term analysis on {symbol}...")
-    quote = get_stock_quote(symbol)
+    quote     = get_stock_quote(symbol)
     consensus = get_analyst_consensus(symbol)
-    context = ""
-    data_warnings = []
-    if quote and "_error" in quote:
-        data_warnings.append(quote["_error"])
-    elif quote:
-        context = f"${symbol}: ${quote.get('price','N/A')} | Cap: ${quote.get('marketCap',0)/1e9:.2f}B\n"
-    if consensus and "_error" in consensus:
-        data_warnings.append(consensus["_error"])
-    elif consensus:
-        context += f"Consensus PT: ${consensus.get('targetConsensus','N/A')}\n"
-    if data_warnings:
-        send_message(chat_id, "\n".join(data_warnings) + "\n<i>Proceeding with available data...</i>")
+    metrics   = get_key_metrics(symbol)
+    ratios    = get_financial_ratios(symbol)
+    income    = get_income_statement(symbol)
+    context   = _fmt_fundamentals(symbol, quote, metrics, ratios, consensus, income)
     prompt = f"""Long-term investing analysis for ${symbol}.
 Cover: business quality, moat, 5yr growth potential,
 management signals, covered call income potential,
@@ -926,14 +1156,31 @@ def handle_insider(chat_id, symbol):
     if not _valid_ticker(symbol):
         send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>. Use 1–5 uppercase letters (e.g. NOW, NVDA).")
         return
-    send_message(chat_id, f"Checking insider activity for {symbol}...")
-    prompt = f"""Check insider trading activity for ${symbol}.
-Cover: recent buys, recent sells, net sentiment,
-CEO ownership %, what the activity signals.
-Today: {datetime.now().strftime('%B %d, %Y')}"""
+    send_message(chat_id, f"Pulling insider data for {symbol}...")
+    trades    = get_insider_trades(symbol)
+    holders   = get_institutional_holders(symbol)
+    quote     = get_stock_quote(symbol)
+    context   = f"{symbol} insider data:\n"
+    if quote and "_error" not in quote:
+        context += f"Price: ${quote.get('price','N/A')}\n"
+    if trades:
+        for t in trades[:8]:
+            action = t.get("transactionType", "")
+            name   = t.get("reportingName", "")
+            shares = t.get("securitiesTransacted", 0)
+            val    = t.get("price", 0)
+            date   = t.get("transactionDate", "")
+            context += f"{date} | {name} | {action} | {shares:,} shares @ ${val}\n"
+    if holders:
+        context += "\nTop institutional holders:\n"
+        for h in holders:
+            context += f"  {h.get('investorName','')}: {h.get('sharesNumber',0):,} shares\n"
+    prompt = (f"Insider trading analysis for ${symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+              f"Cover: who is buying, who is selling, net sentiment over 90 days, "
+              f"institutional ownership trend, bull and bear interpretation of the activity.")
     skill_prompt = get_skill_prompt("/insider")
-    response = ask_claude(prompt, skill_prompt=skill_prompt)
-    send_message(chat_id, f"<b>{symbol} INSIDER ACTIVITY</b>\n\n" + response)
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    send_message(chat_id, f"<b>{symbol} INSIDER ACTIVITY</b>\n<i>Source: FMP Live</i>\n\n" + response)
 
 
 def handle_risk(chat_id, symbol):
@@ -945,15 +1192,20 @@ def handle_risk(chat_id, symbol):
         send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>. Use 1–5 uppercase letters (e.g. NOW, ASTS).")
         return
     send_message(chat_id, f"Running risk check for {symbol}...")
-    quote = get_stock_quote(symbol)
+    quote   = get_stock_quote(symbol)
+    metrics = get_key_metrics(symbol)
     context = ""
-    if quote and "_error" in quote:
-        log.warning(f"Risk handler: FMP quote error for {symbol} — {quote['_error']}")
-    elif quote:
-        context = f"${symbol}: ${quote.get('price','N/A')}"
+    if quote and "_error" not in quote:
+        context = (f"{symbol}: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%) | "
+                   f"Beta: {quote.get('beta','N/A')} | 52wk ${quote.get('yearLow','N/A')}–${quote.get('yearHigh','N/A')}")
+    if metrics:
+        context += (f"\nP/E: {metrics.get('peRatio','N/A')} | "
+                    f"Debt/Equity: {metrics.get('debtToEquity','N/A')} | "
+                    f"EV/EBITDA: {metrics.get('enterpriseValueOverEBITDA','N/A')}")
     prompt = f"""Risk check for a position in ${symbol}.
 Cover: appropriate sizing for a $10K account,
-max loss at stop, correlation risk, Kelly criterion suggestion.
+max loss at stop, correlation risk, Kelly criterion suggestion,
+leverage risk if any, liquidity/beta risk.
 Be honest. Push back if sizing seems aggressive."""
     skill_prompt = get_skill_prompt("/risk")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
@@ -990,6 +1242,10 @@ def handle_help(chat_id):
 /risk [TICKER] — Position risk check + sizing
 /squeeze [TICKER] — Short squeeze potential
 /ipo [TICKER] — IPO analysis
+
+<b>Market Intelligence:</b>
+/sentiment — Full market sentiment + breadth + VIX
+/rotation — Live sector rotation + where money is moving
 
 <b>Comparison & Sectors:</b>
 /scout — 3 fresh weekly picks (rotates sectors)
@@ -1053,26 +1309,18 @@ def handle_compare(chat_id, ticker1, ticker2):
         send_message(chat_id, f"❌ Invalid ticker: <b>{ticker2}</b>. Use 1–5 uppercase letters.")
         return
     send_message(chat_id, f"Comparing {ticker1} vs {ticker2}...")
-    quote1 = get_stock_quote(ticker1)
-    quote2 = get_stock_quote(ticker2)
-    context = ""
-    data_warnings = []
-    if quote1 and "_error" in quote1:
-        data_warnings.append(quote1["_error"])
-    elif quote1:
-        context += f"${ticker1}: ${quote1.get('price','N/A')} | Cap: ${quote1.get('marketCap',0)/1e9:.2f}B\n"
-    if quote2 and "_error" in quote2:
-        data_warnings.append(quote2["_error"])
-    elif quote2:
-        context += f"${ticker2}: ${quote2.get('price','N/A')} | Cap: ${quote2.get('marketCap',0)/1e9:.2f}B\n"
-    if data_warnings:
-        send_message(chat_id, "\n".join(data_warnings) + "\n<i>Proceeding with available data...</i>")
-    prompt = f"""Head-to-head comparison: ${ticker1} vs ${ticker2}.
-Cover: business model, valuation, growth, moat, bull case and bear case for each, verdict.
-Today: {datetime.now().strftime('%B %d, %Y')}"""
+    q1, q2   = get_stock_quote(ticker1), get_stock_quote(ticker2)
+    m1, m2   = get_key_metrics(ticker1), get_key_metrics(ticker2)
+    c1, c2   = get_analyst_consensus(ticker1), get_analyst_consensus(ticker2)
+    context  = _fmt_fundamentals(ticker1, q1, m1, consensus=c1)
+    context += "\n\n" + _fmt_fundamentals(ticker2, q2, m2, consensus=c2)
+    prompt = (f"Head-to-head comparison: ${ticker1} vs ${ticker2}. "
+              f"Today: {datetime.now().strftime('%B %d, %Y')}\n"
+              f"Cover: business model, valuation, growth rate, moat, "
+              f"bull case and bear case for each, clear verdict on which to buy.")
     skill_prompt = get_skill_prompt("/compare")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"<b>{ticker1} vs {ticker2}</b>\n\n" + response)
+    send_message(chat_id, f"<b>{ticker1} vs {ticker2}</b>\n<i>Source: FMP Live</i>\n\n" + response)
 
 
 def handle_dividend(chat_id, symbol):
@@ -1084,18 +1332,19 @@ def handle_dividend(chat_id, symbol):
         send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>. Use 1–5 uppercase letters (e.g. AAPL, KO).")
         return
     send_message(chat_id, f"Analyzing {symbol} dividend...")
-    quote = get_stock_quote(symbol)
-    context = ""
-    if quote and "_error" in quote:
-        log.warning(f"Dividend handler: FMP quote error for {symbol} — {quote['_error']}")
-    elif quote:
-        context = f"${symbol}: ${quote.get('price','N/A')} | Cap: ${quote.get('marketCap',0)/1e9:.2f}B\n"
-    prompt = f"""Dividend analysis for ${symbol}.
-Cover: yield, payout history, sustainability, FCF coverage, bull case, bear case, income scenario.
-Today: {datetime.now().strftime('%B %d, %Y')}"""
+    quote   = get_stock_quote(symbol)
+    ratios  = get_financial_ratios(symbol)
+    income  = get_income_statement(symbol)
+    context = _fmt_fundamentals(symbol, quote, ratios=ratios, income=income)
+    if ratios:
+        context += f"\nDividend yield: {ratios.get('dividendYield','N/A')} | Payout ratio: {ratios.get('payoutRatio','N/A')}"
+    prompt = (f"Dividend analysis for ${symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+              f"Cover: current yield, payout ratio, dividend growth history, FCF coverage, "
+              f"sustainability, bull case (dividend grows), bear case (cut risk), "
+              f"income scenario for $10K invested.")
     skill_prompt = get_skill_prompt("/dividend")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"<b>{symbol} DIVIDEND ANALYSIS</b>\n\n" + response)
+    send_message(chat_id, f"<b>{symbol} DIVIDEND ANALYSIS</b>\n<i>Source: FMP Live</i>\n\n" + response)
 
 
 def handle_momentum(chat_id):
@@ -1227,11 +1476,25 @@ def handle_technical(chat_id, symbol):
         send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>.")
         return
     send_message(chat_id, f"Running technical analysis on {symbol}...")
-    quote = get_stock_quote(symbol)
+    quote  = get_stock_quote(symbol)
+    prices = get_historical_prices(symbol, days=60)
     context = ""
     if quote and "_error" not in quote:
         context = (f"{symbol}: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%)\n"
-                   f"52wk High: ${quote.get('yearHigh','N/A')} | Low: ${quote.get('yearLow','N/A')}")
+                   f"52wk High: ${quote.get('yearHigh','N/A')} | Low: ${quote.get('yearLow','N/A')} | "
+                   f"Avg Vol: {quote.get('avgVolume','N/A')}")
+    if prices and len(prices) >= 5:
+        closes = [p.get("close", 0) for p in prices if p.get("close")]
+        if closes:
+            ma20  = sum(closes[-20:]) / min(len(closes), 20)
+            ma50  = sum(closes[-50:]) / min(len(closes), 50) if len(closes) >= 10 else None
+            high5 = max(closes[-5:])
+            low5  = min(closes[-5:])
+            context += (f"\n60-day price history ({len(closes)} sessions): "
+                        f"Range ${min(closes):.2f}–${max(closes):.2f}\n"
+                        f"20-day MA: ${ma20:.2f}" +
+                        (f" | 50-day MA: ${ma50:.2f}" if ma50 else "") +
+                        f"\nLast 5 sessions: High ${high5:.2f} / Low ${low5:.2f}")
     search = web_search(f"{symbol} technical analysis chart RSI MACD {datetime.now().strftime('%B %Y')}")
     if search:
         context += f"\nRecent technical data:\n{search}"
@@ -1273,18 +1536,23 @@ def handle_crypto(chat_id, symbol):
     if not symbol:
         symbol = "BTC"
     symbol = symbol.strip().upper()
-    send_message(chat_id, f"Pulling crypto analysis for {symbol}...")
-    search = web_search(f"{symbol} crypto price analysis {datetime.now().strftime('%B %d %Y')}")
-    context = f"Crypto: {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}"
+    send_message(chat_id, f"Pulling crypto data for {symbol}...")
+    fmp_quote = get_crypto_quote(symbol)
+    context = f"Crypto: {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+    if fmp_quote:
+        context += (f"Price: ${fmp_quote.get('price','N/A')} | "
+                    f"Change: {fmp_quote.get('changesPercentage',0):+.2f}% | "
+                    f"Market Cap: ${(fmp_quote.get('marketCap',0) or 0)/1e9:.1f}B\n")
+    search = web_search(f"{symbol} crypto analysis price target {datetime.now().strftime('%B %d %Y')}")
     if search:
-        context += f"\nCrypto data:\n{search}"
+        context += f"Web data:\n{search}"
     prompt = (f"Crypto analysis for {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
               f"Cover: price action, key support/resistance, on-chain signals if relevant, "
-              f"macro crypto environment, bull case, bear case, entry range, stop loss. "
-              f"Also cover BTC dominance and overall crypto market sentiment.")
+              f"macro crypto environment, bull case with target, bear case with stop, "
+              f"entry range, position sizing. Also cover BTC dominance context.")
     skill_prompt = get_skill_prompt("/crypto")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"<b>{symbol} CRYPTO ANALYSIS</b>\n\n" + response)
+    send_message(chat_id, f"<b>{symbol} CRYPTO ANALYSIS</b>\n<i>Source: FMP + Web</i>\n\n" + response)
 
 
 def handle_etf(chat_id, symbol):
@@ -1292,21 +1560,25 @@ def handle_etf(chat_id, symbol):
         send_message(chat_id, "❌ Usage: /etf QQQ\nExamples: /etf SPY | /etf ARKK | /etf GLD")
         return
     symbol = symbol.strip().upper()
-    send_message(chat_id, f"Analyzing ETF {symbol}...")
-    quote = get_stock_quote(symbol)
-    context = ""
+    send_message(chat_id, f"Pulling ETF data for {symbol}...")
+    quote    = get_stock_quote(symbol)
+    holdings = get_etf_holdings(symbol)
+    context  = ""
     if quote and "_error" not in quote:
-        context = f"{symbol}: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%)"
-    search = web_search(f"{symbol} ETF holdings flows analysis {datetime.now().strftime('%B %Y')}")
+        context = f"{symbol}: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%) | YTD N/A\n"
+    if holdings:
+        context += "Top holdings:\n"
+        for h in holdings[:8]:
+            context += f"  {h.get('asset','')}: {h.get('weightPercentage','N/A')}%\n"
+    search = web_search(f"{symbol} ETF fund flows performance {datetime.now().strftime('%B %Y')}")
     if search:
-        context += f"\nETF data:\n{search}"
+        context += f"Web data:\n{search}"
     prompt = (f"ETF analysis for {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
-              f"Cover: what this ETF tracks, top holdings, expense ratio, fund flows, "
-              f"performance vs benchmark, bull case (sector/theme upside), bear case (risks), "
-              f"who should own this and why.")
+              f"Cover: what it tracks, top holdings, expense ratio, recent fund flows, "
+              f"performance vs benchmark, bull case, bear case, who should own it.")
     skill_prompt = get_skill_prompt("/etf")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"<b>{symbol} ETF ANALYSIS</b>\n\n" + response)
+    send_message(chat_id, f"<b>{symbol} ETF ANALYSIS</b>\n<i>Source: FMP + Web</i>\n\n" + response)
 
 
 def handle_squeeze(chat_id, symbol):
@@ -1317,21 +1589,27 @@ def handle_squeeze(chat_id, symbol):
     if not _valid_ticker(symbol):
         send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>.")
         return
-    send_message(chat_id, f"Checking short squeeze potential for {symbol}...")
-    quote = get_stock_quote(symbol)
-    context = ""
+    send_message(chat_id, f"Pulling squeeze data for {symbol}...")
+    quote    = get_stock_quote(symbol)
+    short    = get_short_interest(symbol)
+    context  = ""
     if quote and "_error" not in quote:
-        context = f"{symbol}: ${quote.get('price','N/A')}"
-    search = web_search(f"{symbol} short interest squeeze potential {datetime.now().strftime('%B %Y')}")
+        context = (f"{symbol}: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%) | "
+                   f"Float: {quote.get('sharesOutstanding','N/A')}\n")
+    if short:
+        context += (f"Short interest: {short.get('shortInterest','N/A')} shares | "
+                    f"Short % float: {short.get('shortPercentOfFloat','N/A')} | "
+                    f"Days to cover: {short.get('daysToCover','N/A')}\n")
+    search = web_search(f"{symbol} short squeeze interest {datetime.now().strftime('%B %Y')}")
     if search:
-        context += f"\nSqueeze data:\n{search}"
+        context += f"Web data:\n{search}"
     prompt = (f"Short squeeze analysis for {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
-              f"Cover: short interest %, days to cover, float size, borrow rate, "
-              f"recent price action, squeeze trigger levels, bull case (squeeze scenario + target), "
-              f"bear case (short thesis wins), risk/reward, position sizing.")
+              f"Cover: short interest %, days to cover, borrow rate, float, "
+              f"squeeze trigger catalyst, bull case (squeeze target), bear case (short wins), "
+              f"realistic probability, entry and stop.")
     skill_prompt = get_skill_prompt("/squeeze")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"<b>{symbol} SQUEEZE ANALYSIS</b>\n\n" + response)
+    send_message(chat_id, f"<b>{symbol} SQUEEZE ANALYSIS</b>\n<i>Source: FMP + Web</i>\n\n" + response)
 
 
 def handle_ipo(chat_id, symbol):
@@ -1356,34 +1634,42 @@ def handle_fx(chat_id, pair):
     if not pair:
         pair = "DXY"
     pair = pair.strip().upper()
-    send_message(chat_id, f"Analyzing FX: {pair}...")
+    send_message(chat_id, f"Pulling FX data for {pair}...")
+    fmp_fx = get_forex_rates()
+    context = f"FX: {pair}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+    if fmp_fx:
+        for r in fmp_fx[:6]:
+            context += f"{r.get('ticker','')}: {r.get('bid','N/A')} / {r.get('ask','N/A')} | chg {r.get('changes',0):+.4f}\n"
     search = web_search(f"{pair} forex currency analysis {datetime.now().strftime('%B %Y')}")
-    context = f"FX pair/index: {pair}. Today: {datetime.now().strftime('%B %d, %Y')}"
     if search:
-        context += f"\nFX data:\n{search}"
+        context += f"Web data:\n{search}"
     prompt = (f"Forex/currency analysis for {pair}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
               f"Cover: current trend and key levels, central bank policy differential, "
               f"macro drivers, correlation to equities/gold/commodities, "
-              f"bull case (strengthens), bear case (weakens), what it means for US stocks.")
+              f"bull case (strengthens), bear case (weakens), impact on US multinationals.")
     skill_prompt = get_skill_prompt("/fx")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"<b>{pair} FX ANALYSIS</b>\n\n" + response)
+    send_message(chat_id, f"<b>{pair} FX ANALYSIS</b>\n<i>Source: FMP + Web</i>\n\n" + response)
 
 
 def handle_commodities(chat_id):
-    send_message(chat_id, "Pulling commodities analysis...")
-    search = web_search(f"commodities oil gold silver copper prices analysis {datetime.now().strftime('%B %Y')}")
-    context = f"Today: {datetime.now().strftime('%B %d, %Y')}"
+    send_message(chat_id, "Pulling live commodity prices...")
+    prices  = get_commodity_prices()
+    context = f"Today: {datetime.now().strftime('%B %d, %Y')}\n"
+    if prices:
+        context += "Live commodity prices:\n"
+        for c in prices[:10]:
+            context += f"  {c.get('symbol','')}: ${c.get('price','N/A')} ({c.get('changesPercentage',0):+.2f}%)\n"
+    search = web_search(f"commodities oil gold copper outlook {datetime.now().strftime('%B %Y')}")
     if search:
-        context += f"\nCommodities web data:\n{search}"
+        context += f"Web data:\n{search}"
     prompt = (f"Commodities market overview. Today: {datetime.now().strftime('%B %d, %Y')}\n"
-              f"Cover: oil (WTI/Brent) — trend and key levels, gold — safe haven demand vs real yields, "
-              f"silver — industrial vs monetary, copper — economic signal, natural gas, "
-              f"agricultural commodities if noteworthy. Bull case and bear case for each. "
-              f"What commodities are signaling about the broader economy.")
+              f"Cover: oil (WTI/Brent) trend, gold vs real yields, silver industrial/monetary, "
+              f"copper as economic signal, natural gas, ags if notable. "
+              f"Bull case and bear case for each. What the complex signals about the economy.")
     skill_prompt = get_skill_prompt("/commodities")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"<b>COMMODITIES OVERVIEW</b>\n{datetime.now().strftime('%b %d, %Y')}\n\n" + response)
+    send_message(chat_id, f"<b>COMMODITIES</b>\n<i>Source: FMP Live</i>\n{datetime.now().strftime('%b %d, %Y')}\n\n" + response)
 
 
 def handle_sentiment(chat_id):
@@ -1438,10 +1724,22 @@ def handle_rotation(chat_id):
 
 def handle_premarket(chat_id):
     send_message(chat_id, "Pulling pre-market intelligence...")
+    commodities = get_commodity_prices()
+    rates       = get_treasury_rates()
+    context     = f"Today: {datetime.now().strftime('%B %d, %Y')}\n"
+    if commodities:
+        key_comms = {c.get("symbol", ""): c for c in commodities if c.get("symbol")}
+        for sym in ["ZGUSD", "CLUSD", "BZUSD", "HGUSD"]:
+            if sym in key_comms:
+                c = key_comms[sym]
+                context += f"{c.get('name', sym)}: ${c.get('price','N/A')} ({c.get('changesPercentage',0):+.2f}%)\n"
+    if rates and "_error" not in rates:
+        context += (f"10yr: {rates.get('year10','N/A')}% | "
+                    f"2yr: {rates.get('year2','N/A')}% | "
+                    f"30yr: {rates.get('year30','N/A')}%\n")
     search = web_search(f"pre-market movers futures overnight {datetime.now().strftime('%B %d %Y')}")
-    context = f"Today: {datetime.now().strftime('%B %d, %Y')}"
     if search:
-        context += f"\nPre-market data:\n{search}"
+        context += f"Pre-market data:\n{search}"
     prompt = (f"Pre-market brief. Today: {datetime.now().strftime('%B %d, %Y')}\n"
               f"Cover: S&P 500 / Nasdaq futures direction, overnight catalysts, "
               f"major pre-market movers (up AND down) and why, key economic data releasing today, "
@@ -1449,6 +1747,62 @@ def handle_premarket(chat_id):
     skill_prompt = get_skill_prompt("/premarket")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
     send_message(chat_id, f"<b>PRE-MARKET BRIEF</b>\n{datetime.now().strftime('%b %d | %I:%M %p ET')}\n\n" + response)
+
+
+def handle_sentiment(chat_id):
+    send_message(chat_id, "Reading market sentiment...")
+    sectors = get_sector_performance()
+    rates   = get_treasury_rates()
+    context = f"Today: {datetime.now().strftime('%B %d, %Y')}\n"
+    if sectors:
+        context += "Sector performance:\n"
+        for s in sectors[:11]:
+            context += f"  {s.get('sector','')}: {s.get('changesPercentage',0):+.2f}%\n"
+    if rates and "_error" not in rates:
+        context += (f"Yields — 10yr: {rates.get('year10','N/A')}% | "
+                    f"2yr: {rates.get('year2','N/A')}% | "
+                    f"Spread: {(float(rates.get('year10',0) or 0) - float(rates.get('year2',0) or 0)):+.2f}%\n")
+    watchlist_quotes = []
+    for sym in ["SPY", "QQQ", "IWM", "VIX"]:
+        q = get_stock_quote(sym)
+        if q and "_error" not in q:
+            watchlist_quotes.append(f"{sym}: ${q.get('price','N/A')} ({q.get('changePercentage',0):+.2f}%)")
+    if watchlist_quotes:
+        context += " | ".join(watchlist_quotes) + "\n"
+    search = web_search(f"market sentiment VIX put call ratio fear greed {datetime.now().strftime('%B %Y')}")
+    if search:
+        context += f"Web data:\n{search}"
+    prompt = (f"Market sentiment analysis. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+              f"Cover: overall risk-on/risk-off regime, VIX interpretation, sector breadth, "
+              f"yield curve signal, fund flow direction, contrarian signals, positioning recommendation.")
+    skill_prompt = get_skill_prompt("/sentiment")
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    send_message(chat_id, f"<b>MARKET SENTIMENT</b>\n<i>Source: FMP Live + Web</i>\n{datetime.now().strftime('%b %d, %Y')}\n\n" + response)
+
+
+def handle_rotation(chat_id):
+    send_message(chat_id, "Analyzing sector rotation...")
+    sectors = get_sector_performance()
+    rates   = get_treasury_rates()
+    context = f"Today: {datetime.now().strftime('%B %d, %Y')}\n"
+    if sectors:
+        sorted_sectors = sorted(sectors, key=lambda x: x.get("changesPercentage", 0), reverse=True)
+        context += "Sector performance (ranked):\n"
+        for s in sorted_sectors:
+            context += f"  {s.get('sector','')}: {s.get('changesPercentage',0):+.2f}%\n"
+    if rates and "_error" not in rates:
+        context += (f"Yields — 10yr: {rates.get('year10','N/A')}% | "
+                    f"2yr: {rates.get('year2','N/A')}% | "
+                    f"30yr: {rates.get('year30','N/A')}%\n")
+    search = web_search(f"sector rotation market leadership {datetime.now().strftime('%B %Y')}")
+    if search:
+        context += f"Web data:\n{search}"
+    prompt = (f"Sector rotation analysis. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+              f"Cover: current rotation regime, top/bottom 3 sectors with macro drivers, "
+              f"growth vs value, best ETF plays, highest-conviction rotation trade.")
+    skill_prompt = get_skill_prompt("/rotation")
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    send_message(chat_id, f"<b>SECTOR ROTATION</b>\n<i>Source: FMP Live + Web</i>\n{datetime.now().strftime('%b %d, %Y')}\n\n" + response)
 
 
 # ─────────────────────────────────────
@@ -1513,22 +1867,48 @@ def process_command(chat_id, text):
         history = _history_get(chat_id)
         context = f"Today: {datetime.now().strftime('%B %d, %Y %I:%M %p ET')}"
 
-        # Inject live prices if the message mentions markets/tickers
+        # Inject live prices + FMP fundamentals when tickers are detected
         text_upper = text.upper()
-        if any(w in text_upper for w in WATCHLIST + ["MARKET", "SPY", "QQQ", "NASDAQ", "S&P", "DOW", "STOCK", "PRICE", "CRYPTO", "BITCOIN", "BTC"]):
+        tickers_found = re.findall(r'\b[A-Z]{2,5}\b', text_upper)
+        # Filter to likely tickers (not common words)
+        _SKIP_WORDS = {"A", "AN", "AT", "BE", "BY", "DO", "GO", "HE", "IF", "IN", "IS",
+                       "IT", "ME", "MY", "NO", "OF", "OK", "ON", "OR", "SO", "TO", "UP",
+                       "US", "WE", "BUT", "FOR", "GET", "GOT", "HAS", "HOW", "ITS", "LET",
+                       "NOT", "NOW", "OFF", "OLD", "ONE", "OUT", "OWN", "PUT", "SAY", "SEE",
+                       "THE", "TOO", "TWO", "USE", "WAS", "WAY", "WHO", "WHY", "YOU",
+                       "ALL", "AND", "ARE", "HAD", "HIM", "HIS", "NEW", "OUR", "CAN",
+                       "DID", "MAY", "OVER", "THAN", "THAT", "THEM", "THEN", "THEY",
+                       "THIS", "WILL", "WITH", "FROM", "JUST", "BEEN", "HAVE", "MORE",
+                       "WHAT", "WHEN", "WERE", "ALSO", "BACK", "EACH", "EVEN", "HERE",
+                       "INTO", "LOOK", "MAKE", "SAME", "SOME", "SUCH", "TAKE", "TELL",
+                       "WELL", "WENT", "DOES", "DONE", "GIVE", "HIGH", "LAST", "LONG",
+                       "MUCH", "NEXT", "ONLY", "SAID", "SHOW", "VERY", "WEEK", "YEAR",
+                       "NASDAQ", "ABOUT", "AFTER", "AGAIN", "COULD", "FIRST", "FOUND",
+                       "GREAT", "THOSE", "THREE", "WHERE", "WHICH", "WHILE", "WOULD",
+                       "THEIR", "THERE", "THESE", "THINK", "TODAY", "TRADE", "STOCK"}
+        ticker_candidates = [t for t in tickers_found if t not in _SKIP_WORDS and len(t) >= 2]
+
+        market_keywords = ["MARKET", "SPY", "QQQ", "NASDAQ", "S&P", "DOW", "STOCK", "PRICE", "CRYPTO", "BITCOIN", "BTC"]
+        if any(w in text_upper for w in WATCHLIST + market_keywords):
             for symbol in WATCHLIST[:6]:
                 quote = get_stock_quote(symbol)
                 if quote and "_error" not in quote:
                     context += f"\n{symbol}: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%)"
+        elif ticker_candidates:
+            # Pull rich FMP data for the first detected ticker
+            primary = ticker_candidates[0]
+            quote   = get_stock_quote(primary)
+            metrics = get_key_metrics(primary)
+            fdata   = _fmt_fundamentals(primary, quote, metrics)
+            if fdata:
+                context += f"\n{fdata}"
 
-        # Web search enrichment for specific queries
+        # Web search enrichment
         search_query = None
         if any(w in text_upper for w in ["NEWS", "LATEST", "TODAY", "HAPPENED", "RECENT"]):
             search_query = f"{text} {datetime.now().strftime('%B %Y')}"
-        elif re.search(r'\b[A-Z]{2,5}\b', text_upper):
-            # Contains a potential ticker
-            tickers_found = re.findall(r'\b[A-Z]{2,5}\b', text_upper)
-            search_query = f"{tickers_found[0]} stock news {datetime.now().strftime('%B %Y')}"
+        elif ticker_candidates:
+            search_query = f"{ticker_candidates[0]} stock news {datetime.now().strftime('%B %Y')}"
         if search_query:
             search = web_search(search_query)
             if search:
