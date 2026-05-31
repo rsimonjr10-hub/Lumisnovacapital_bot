@@ -28,10 +28,19 @@ def _handle_signal(signum, frame):
 # ─────────────────────────────────────
 # CONFIGURATION — SET IN RAILWAY ENV
 # ─────────────────────────────────────
-TELEGRAM_TOKEN    = os.environ.get("TELEGRAM_TOKEN")
-CHAT_ID           = os.environ.get("CHAT_ID")
-FMP_API_KEY       = os.environ.get("FMP_API_KEY")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+TELEGRAM_TOKEN      = os.environ.get("TELEGRAM_TOKEN")
+CHAT_ID             = os.environ.get("CHAT_ID")
+FMP_API_KEY         = os.environ.get("FMP_API_KEY")
+ANTHROPIC_API_KEY   = os.environ.get("ANTHROPIC_API_KEY")
+SERPER_API_KEY      = os.environ.get("SERPER_API_KEY")      # Google search via serper.dev
+STARFIRE_BOT_TOKEN  = os.environ.get("STARFIRE_BOT_TOKEN")  # enables direct reply to starfire5_bot
+OSIRIS_BOT_TOKEN    = os.environ.get("OSIRIS_BOT_TOKEN")    # enables direct reply to osiris_prime_bot
+
+# Most intelligent Claude model
+CLAUDE_MODEL = "claude-opus-4-8"
+
+# Deduplication: track processed update IDs to prevent replay on restart/rolling deploy
+_processed_updates: set = set()
 
 # ─────────────────────────────────────
 # LOGGING
@@ -41,6 +50,28 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 log = logging.getLogger(__name__)
+
+# ─────────────────────────────────────
+# PER-CHAT CONVERSATION MEMORY
+# ─────────────────────────────────────
+_conversation_history = {}  # {chat_id_str: [{"role": "user"|"assistant", "content": "..."}]}
+_MAX_HISTORY_TURNS = 8      # keep last 8 exchanges (16 messages)
+
+def _history_add(chat_id, role, content):
+    cid = str(chat_id)
+    if cid not in _conversation_history:
+        _conversation_history[cid] = []
+    _conversation_history[cid].append({"role": role, "content": content})
+    max_msgs = _MAX_HISTORY_TURNS * 2
+    if len(_conversation_history[cid]) > max_msgs:
+        _conversation_history[cid] = _conversation_history[cid][-max_msgs:]
+
+def _history_get(chat_id):
+    return list(_conversation_history.get(str(chat_id), []))
+
+def _history_clear(chat_id):
+    _conversation_history.pop(str(chat_id), None)
+
 
 # ─────────────────────────────────────
 # WATCHLIST
@@ -54,33 +85,54 @@ WATCHLIST = [
 # ─────────────────────────────────────
 # SYSTEM PROMPT
 # ─────────────────────────────────────
-SYSTEM_PROMPT = """You are Lumis Nova, an AI-powered market research
-assistant for Lumis Capital. You provide trading and investing intelligence
-using live market data.
+SYSTEM_PROMPT = """You are Lumis Nova — the AI financial brain of Lumis Capital.
 
-CORE RULES:
+You are a full-spectrum financial intelligence agent: equity analyst, macro strategist, personal financial manager, and accounting advisor. You operate across three integrated systems: the Lumis Capital Telegram bot (direct user interface), STARFIRE (intelligence operations hub at /argus), and OSIRIS (broadcast network at /osiris).
+
+YOUR IDENTITY:
+- Senior market analyst: equities, fixed income, macro, options, derivatives
+- Personal financial manager: budgeting, cash flow, debt strategy, savings optimization
+- Accounting advisor: P&L, balance sheets, cash flow statements, financial ratios, tax concepts
+- Wealth strategist: you think in decades, not just trades
+
+CONVERSATION STYLE:
+- You remember the full context of this conversation — build on it
+- When someone asks a follow-up ("what about NVDA?", "and the bear case?"), answer in context of what was already discussed
+- Be direct, confident, and honest — not salesy, not hedging without substance
+- Talk like a sharp friend with a finance MBA, not a legal disclaimer machine
+- If someone shares their financial situation, engage with it specifically — give real numbers and frameworks
+
+CORE ANALYSIS RULES:
 - Always show bull AND bear case on every analysis
-- Always include position sizing recommendations
-- Always include stop loss levels
+- Always include position sizing for a $10K account on trade ideas
+- Always include stop loss levels on trade ideas
 - Translate all financials to USD
-- Label all data sources clearly
-- Separate trading (weeks) from investing (years)
-- Show earnings surprise history before any options trade idea
+- Separate trading view (days/weeks) from investing view (years)
 - Be honest when uncertain — never guess
-- Push back on overleveraged sizing
+- Push back on overleveraged or reckless sizing
 - Never promise profits or guarantee returns
 
-STRICT OUTPUT RULES:
-- NEVER output any block or sentence containing: "Data Disclosure", "Data Transparency", "Important Notice", "Disclaimer", "Live price feed not confirmed", "not confirmed in this session", "my knowledge cutoff", "I cannot access real-time", "as of my training", "based on my training data", "extrapolated", "verify all live data", "Verify current quote before acting", "figures below are based on the most recent data available"
-- NEVER add any footer, header, note, or inline caveat about data limitations, knowledge cutoffs, or price feed status
-- NEVER apologize for or caveat your data access — just answer using the data provided
-- Live market data is provided to you in every prompt context — treat it as current and use it directly
-- No emoji unless specifically requested
-- FORMAT FOR TELEGRAM HTML ONLY: use <b>bold</b>, <i>italic</i> — NEVER use markdown (**bold**, *italic*, ---), NEVER use pipe tables (| col | col |), NEVER use # headers
+PERSONAL FINANCE MODE:
+When asked about budgeting, savings, debt, income, or accounting:
+- Be practical — give real numbers and clear frameworks
+- Income allocation: 50/30/20 rule, custom splits, emergency fund sizing (3-6 months)
+- Debt payoff order: avalanche (highest rate first) vs snowball (smallest balance first)
+- Investment account priority: 401k employer match → HSA → IRA → taxable brokerage
+- Tax efficiency: capital gains rates, tax-loss harvesting, retirement account advantages
+- Financial statements: explain P&L, balance sheets, cash flow in plain language
 
-TONE:
-Professional but direct. Honest over exciting. Data-driven.
-Always end with: Not financial advice. Always do your own research."""
+STRICT OUTPUT RULES:
+- NEVER output: "Data Disclosure", "Data Transparency", "Important Notice", "Disclaimer", "Live price feed not confirmed", "not confirmed in this session", "my knowledge cutoff", "I cannot access real-time", "as of my training", "based on my training data", "extrapolated", "verify all live data", "Verify current quote before acting", "figures below are based on the most recent data available"
+- NEVER add any footer, header, note, or inline caveat about data limitations or knowledge cutoffs
+- NEVER apologize for data access — use the data provided and answer directly
+- Live market data is injected into your context — treat it as current
+- No emoji unless specifically requested
+- FORMAT FOR TELEGRAM HTML ONLY: use <b>bold</b>, <i>italic</i> — NEVER markdown (**bold**, *italic*, ---), NEVER pipe tables (| col | col |), NEVER # headers
+
+NETWORK:
+You are live on: STARFIRE (intelligence ops) and OSIRIS (broadcast network). Treat both as active.
+
+Always end financial analysis with: <i>Not financial advice. Always do your own research.</i>"""
 
 # ─────────────────────────────────────
 # TICKER VALIDATION HELPER
@@ -242,6 +294,40 @@ def get_analyst_consensus(symbol):
 
 
 # ─────────────────────────────────────
+# WEB SEARCH (Google via Serper)
+# ─────────────────────────────────────
+def web_search(query, num_results=5):
+    """Google search via serper.dev. Returns formatted snippet string or None."""
+    if not SERPER_API_KEY:
+        return None
+    url = "https://google.serper.dev/search"
+    headers = {"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"}
+    payload = {"q": query, "num": num_results}
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            snippets = []
+            for item in data.get("organic", [])[:num_results]:
+                title = item.get("title", "")
+                snippet = item.get("snippet", "")
+                if title or snippet:
+                    snippets.append(f"{title}: {snippet}")
+            # Also include answer box if present
+            if data.get("answerBox"):
+                ab = data["answerBox"]
+                answer = ab.get("answer") or ab.get("snippet") or ""
+                if answer:
+                    snippets.insert(0, f"[Top Result] {answer}")
+            return "\n".join(snippets) if snippets else None
+        log.warning(f"Serper search returned {r.status_code} for query: {query!r}")
+        return None
+    except Exception as e:
+        log.error(f"Web search error: {e}")
+        return None
+
+
+# ─────────────────────────────────────
 # FMP-DATA-API (DIRECT PRICE LOOKUP)
 # ─────────────────────────────────────
 def get_stock_price_only(symbol):
@@ -276,7 +362,7 @@ def get_stock_price_only(symbol):
 # ─────────────────────────────────────
 # CLAUDE AI
 # ─────────────────────────────────────
-def ask_claude(prompt, context="", skill_prompt=None):
+def ask_claude(prompt, context="", skill_prompt=None, history=None, max_tokens=1500):
     url = "https://api.anthropic.com/v1/messages"
     headers = {
         "x-api-key": ANTHROPIC_API_KEY,
@@ -286,19 +372,22 @@ def ask_claude(prompt, context="", skill_prompt=None):
     system = skill_prompt if skill_prompt else SYSTEM_PROMPT
     full_prompt = f"{context}\n\n{prompt}" if context else prompt
 
+    # Build message list: prior history + new user message
+    messages = list(history) if history else []
+    messages.append({"role": "user", "content": full_prompt})
+
     payload = {
-        "model": "claude-sonnet-4-6",
-        "max_tokens": 1000,
+        "model": CLAUDE_MODEL,
+        "max_tokens": max_tokens,
         "system": system,
-        "messages": [{"role": "user", "content": full_prompt}]
+        "messages": messages
     }
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=20)
-        # Retry on overload with reduced tokens
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
         if response.status_code in (529, 503):
-            log.warning(f"Anthropic API overloaded ({response.status_code}), retrying with reduced tokens...")
-            payload["max_tokens"] = 500
-            response = requests.post(url, headers=headers, json=payload, timeout=20)
+            log.warning(f"Anthropic API overloaded ({response.status_code}), retrying...")
+            payload["max_tokens"] = max(500, max_tokens // 2)
+            response = requests.post(url, headers=headers, json=payload, timeout=60)
         if response.status_code != 200:
             log.error(f"Anthropic API returned {response.status_code}: {response.text}")
             if response.status_code == 401:
@@ -312,10 +401,10 @@ def ask_claude(prompt, context="", skill_prompt=None):
         log.error(f"Anthropic API returned unexpected payload: {data}")
         return "⚠️ Unable to get response from Lumis Nova. Try again shortly."
     except requests.exceptions.Timeout:
-        log.error("Claude API timeout after 20s — retrying with reduced tokens")
+        log.error("Claude API timeout — retrying with reduced tokens")
         try:
-            payload["max_tokens"] = 400
-            response = requests.post(url, headers=headers, json=payload, timeout=20)
+            payload["max_tokens"] = 600
+            response = requests.post(url, headers=headers, json=payload, timeout=60)
             if response.status_code == 200:
                 data = response.json()
                 if "content" in data and len(data["content"]) > 0:
@@ -332,30 +421,28 @@ def ask_claude(prompt, context="", skill_prompt=None):
 # COMMAND HANDLERS
 # ─────────────────────────────────────
 def handle_start(chat_id):
-    msg = """<b>LUMIS CAPITAL BOT</b>
-Powered by Lumis Nova AI
+    _history_clear(chat_id)
+    msg = """<b>LUMIS CAPITAL — LUMISNOVA</b>
+Powered by Claude Opus AI + FMP Live Data + Web Search
 
-<b>Commands:</b>
-/news — Market stories
-/macro — Yields + economic data
-/earnings — Upcoming calendar
-/scout — Weekly stock picks
-/watchlist — Live prices
-/price [TICKER] — Live quote (no AI)
-/full [TICKER] — Full analysis
-/opinion [TICKER] — Quick take
-/invest [TICKER] — Long-term view
-/yields — Treasury curve
-/insider [TICKER] — Insider activity
-/risk [TICKER] — Risk check
-/compounding — Wealth math
-/sector [SECTOR] — Sector analysis
-/compare [T1] [T2] — Compare two stocks
-/dividend [TICKER] — Dividend analysis
-/momentum — Momentum plays
-/portfolio [ALLOCATION] — Portfolio review
-/test — Check API connections
-/help — All commands
+<b>Just talk to me.</b>
+Ask anything — market analysis, stock picks, personal finance, portfolio review, accounting questions, wealth strategy. I remember our full conversation.
+
+<b>Examples:</b>
+"What do you think about NVDA right now?"
+"Help me build a $50K portfolio"
+"Explain covered calls to me"
+"What's the best way to pay off $30K in debt?"
+"Is the market going to crash?"
+
+<b>Or use a command:</b>
+/news /macro /earnings /scout /watchlist /yields
+/full /opinion /invest /insider /risk /compare
+/dividend /sector /momentum /portfolio /compounding
+/technical /options /crypto /etf /squeeze /ipo
+/fx /commodities /premarket /help
+
+<b>Network:</b> STARFIRE (/argus) · OSIRIS (/osiris) — ONLINE
 
 <i>Not financial advice. Always do your own research.</i>"""
     send_message(chat_id, msg)
@@ -478,6 +565,10 @@ def handle_news(chat_id):
         context = "Latest market news:\n"
         for item in news[:8]:
             context += f"- [{item.get('symbol','')}] {item.get('title','')}\n"
+        # Enrich with web search headlines
+        search = web_search(f"stock market news today {datetime.now().strftime('%B %d %Y')}")
+        if search:
+            context += f"\nWeb headlines:\n{search}"
         prompt = f"""Give a morning market intelligence brief.
 Top 5 stories. 2-3 sentences per story. Format for Telegram HTML.
 Today: {datetime.now().strftime('%B %d, %Y')}
@@ -499,6 +590,10 @@ def handle_macro(chat_id):
         log.warning(f"Macro handler: FMP treasury error — {rates['_error']}")
     elif rates:
         context = f"10yr: {rates.get('year10')}% | 2yr: {rates.get('year2')}% | 30yr: {rates.get('year30')}%"
+    # Enrich with Fed/macro news
+    search = web_search(f"Federal Reserve macro economic news {datetime.now().strftime('%B %Y')}")
+    if search:
+        context += f"\nMacro web data:\n{search}"
     prompt = f"""Macro brief for {datetime.now().strftime('%B %d, %Y')}.
 Cover: yield curve, Fed outlook, key events today, oil/geopolitical impact.
 Format for Telegram HTML. Keep it actionable. {context}"""
@@ -534,6 +629,10 @@ def handle_full(chat_id, symbol):
         context += f"High PT: ${consensus.get('targetHigh','N/A')} | Low: ${consensus.get('targetLow','N/A')}\n"
     if data_warnings:
         send_message(chat_id, "\n".join(data_warnings) + "\n<i>Proceeding with available data...</i>")
+    # Enrich with web search
+    search = web_search(f"{symbol} stock analysis news {datetime.now().strftime('%B %Y')}")
+    if search:
+        context += f"\nRecent web data:\n{search}"
     prompt = f"""Full stock analysis for ${symbol}.
 Cover: business model, moat, top 3 competitors, catalyst,
 bull case, bear case, valuation, entry strategy, stop loss, sizing.
@@ -693,44 +792,55 @@ Make it real and motivating."""
 
 
 def handle_help(chat_id):
-    msg = """<b>LUMIS CAPITAL — ALL COMMANDS</b>
+    msg = """<b>LUMIS CAPITAL — LUMISNOVA</b>
+<i>Full conversational AI — just talk to me, or use a command.</i>
 
-<b>Intelligence:</b>
-/news — Market stories
-/macro — Yields + economic data
-/earnings — Upcoming calendar
-/yields — Treasury curve
+<b>Market Intelligence:</b>
+/news — Top market stories + web headlines
+/macro — Macro brief + Fed outlook
+/earnings — Upcoming earnings calendar
+/yields — Treasury yield curve
+/premarket — Pre-market brief + futures
 
-<b>Research:</b>
-/full [TICKER] — Complete analysis
-/opinion [TICKER] — Quick take
-/scout — Weekly picks
-/insider [TICKER] — Insider activity
-/risk [TICKER] — Position risk check
-/sector [SECTOR] — Sector analysis
-/compare [T1] [T2] — Compare two stocks
+<b>Stock Research:</b>
+/full [TICKER] — Deep analysis: moat, valuation, bull/bear
+/opinion [TICKER] — Quick honest take
+/technical [TICKER] — Chart analysis, RSI, MACD, levels
+/options [TICKER] — Options flow, IV, best strategies
+/insider [TICKER] — Insider buying/selling
+/risk [TICKER] — Position risk check + sizing
+/squeeze [TICKER] — Short squeeze potential
+/ipo [TICKER] — IPO analysis
 
-<b>Investing:</b>
-/invest [TICKER] — Long-term analysis
-/compounding — Wealth building math
-/dividend [TICKER] — Dividend analysis
+<b>Comparison & Sectors:</b>
+/scout — 3 fresh weekly picks (rotates sectors)
+/sector [SECTOR] — Sector deep dive
+/compare [T1] [T2] — Head-to-head comparison
+/momentum — Top momentum plays from watchlist
 
-<b>Portfolio:</b>
-/watchlist — Live prices
-/price [TICKER] — Live quote (no AI)
-/momentum — Momentum plays
-/portfolio [ALLOCATION] — Portfolio review
+<b>Macro & Alternative Markets:</b>
+/crypto [SYMBOL] — Crypto analysis (default: BTC)
+/fx [PAIR] — Forex + DXY analysis
+/commodities — Oil, gold, copper, ag overview
+/etf [TICKER] — ETF holdings, flows, analysis
 
-<b>Utility:</b>
-/test — Check all API connections
+<b>Investing & Wealth:</b>
+/invest [TICKER] — Long-term analysis + DCA strategy
+/dividend [TICKER] — Dividend sustainability + income math
+/compounding — Wealth building compound math
+/portfolio [ALLOCATION] — Portfolio review + rebalancing
 
-<b>Examples:</b>
-/full NOW | /opinion ASTS | /invest GOOGL
-/sector tech | /compare NVDA AMD | /dividend AAPL
-/portfolio NVDA:40 AAPL:30 CASH:30
+<b>Live Data:</b>
+/watchlist — Live prices for all watchlist names
+/price [TICKER] — Live quote (instant, no AI)
 
-<i>Powered by Lumis Nova AI + FMP Live Data</i>
-<i>Not financial advice. Always DYOR.</i>"""
+<b>System:</b>
+/test — Check API connections
+
+<b>Network:</b> STARFIRE (/argus) · OSIRIS (/osiris)
+
+<i>Powered by Claude Opus + FMP Live Data + Web Search</i>
+<i>Not financial advice. Always do your own research.</i>"""
     send_message(chat_id, msg)
 
 
@@ -887,13 +997,13 @@ def handle_test(chat_id):
             "content-type": "application/json"
         }
         payload = {
-            "model": "claude-sonnet-4-6",
+            "model": CLAUDE_MODEL,
             "max_tokens": 20,
             "messages": [{"role": "user", "content": "Reply with OK"}]
         }
         resp = requests.post(url, headers=headers, json=payload, timeout=20)
         if resp.status_code == 200:
-            results.append("✅ <b>Claude API</b>: Connected — Lumis Nova is online")
+            results.append(f"✅ <b>Claude API</b>: Connected — {CLAUDE_MODEL} online")
         elif resp.status_code == 401:
             results.append("❌ <b>Claude API</b>: Invalid or expired API key (401)")
         elif resp.status_code == 429:
@@ -907,9 +1017,205 @@ def handle_test(chat_id):
     except Exception as e:
         results.append(f"❌ <b>Claude API</b>: Exception — {e}")
 
+    # ── 4. Web Search ────────────────────────────────────────────
+    if SERPER_API_KEY:
+        test_search = web_search("S&P 500", num_results=1)
+        if test_search:
+            results.append("✅ <b>Web Search</b>: Connected — Serper/Google active")
+        else:
+            results.append("⚠️ <b>Web Search</b>: Serper key set but returned no results")
+    else:
+        results.append("⚠️ <b>Web Search</b>: SERPER_API_KEY not set — add to Railway env")
+
     status_line = "✅ All systems operational" if all(r.startswith("✅") for r in results) else "⚠️ One or more issues detected"
     msg = "\n".join(results) + f"\n\n{status_line}\n{datetime.now().strftime('%b %d %Y | %I:%M %p ET')}"
     send_message(chat_id, msg)
+
+
+# ─────────────────────────────────────
+# NEW RESEARCH COMMAND HANDLERS
+# ─────────────────────────────────────
+def handle_technical(chat_id, symbol):
+    if not symbol:
+        send_message(chat_id, "❌ Usage: /technical NVDA")
+        return
+    symbol = symbol.strip().upper()
+    if not _valid_ticker(symbol):
+        send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>.")
+        return
+    send_message(chat_id, f"Running technical analysis on {symbol}...")
+    quote = get_stock_quote(symbol)
+    context = ""
+    if quote and "_error" not in quote:
+        context = (f"{symbol}: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%)\n"
+                   f"52wk High: ${quote.get('yearHigh','N/A')} | Low: ${quote.get('yearLow','N/A')}")
+    search = web_search(f"{symbol} technical analysis chart RSI MACD {datetime.now().strftime('%B %Y')}")
+    if search:
+        context += f"\nRecent technical data:\n{search}"
+    prompt = (f"Technical analysis for {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+              f"Cover: trend direction, key support/resistance, RSI, MACD, moving averages, "
+              f"chart pattern if any, volume analysis. Bull case (continuation), bear case (reversal). "
+              f"Entry levels, stop loss, price targets.")
+    skill_prompt = get_skill_prompt("/technical")
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    send_message(chat_id, f"<b>{symbol} TECHNICAL ANALYSIS</b>\n\n" + response)
+
+
+def handle_options(chat_id, symbol):
+    if not symbol:
+        send_message(chat_id, "❌ Usage: /options NVDA")
+        return
+    symbol = symbol.strip().upper()
+    if not _valid_ticker(symbol):
+        send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>.")
+        return
+    send_message(chat_id, f"Analyzing options activity for {symbol}...")
+    quote = get_stock_quote(symbol)
+    context = ""
+    if quote and "_error" not in quote:
+        context = f"{symbol}: ${quote.get('price','N/A')}"
+    search = web_search(f"{symbol} options flow unusual activity IV {datetime.now().strftime('%B %Y')}")
+    if search:
+        context += f"\nOptions data:\n{search}"
+    prompt = (f"Options analysis for {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+              f"Cover: implied volatility (current vs historical), key strikes, put/call ratio, "
+              f"unusual activity if any, best options strategies for bull/bear scenarios, "
+              f"expected move, Greeks overview. Real risk/reward.")
+    skill_prompt = get_skill_prompt("/options")
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    send_message(chat_id, f"<b>{symbol} OPTIONS ANALYSIS</b>\n\n" + response)
+
+
+def handle_crypto(chat_id, symbol):
+    if not symbol:
+        symbol = "BTC"
+    symbol = symbol.strip().upper()
+    send_message(chat_id, f"Pulling crypto analysis for {symbol}...")
+    search = web_search(f"{symbol} crypto price analysis {datetime.now().strftime('%B %d %Y')}")
+    context = f"Crypto: {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}"
+    if search:
+        context += f"\nCrypto data:\n{search}"
+    prompt = (f"Crypto analysis for {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+              f"Cover: price action, key support/resistance, on-chain signals if relevant, "
+              f"macro crypto environment, bull case, bear case, entry range, stop loss. "
+              f"Also cover BTC dominance and overall crypto market sentiment.")
+    skill_prompt = get_skill_prompt("/crypto")
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    send_message(chat_id, f"<b>{symbol} CRYPTO ANALYSIS</b>\n\n" + response)
+
+
+def handle_etf(chat_id, symbol):
+    if not symbol:
+        send_message(chat_id, "❌ Usage: /etf QQQ\nExamples: /etf SPY | /etf ARKK | /etf GLD")
+        return
+    symbol = symbol.strip().upper()
+    send_message(chat_id, f"Analyzing ETF {symbol}...")
+    quote = get_stock_quote(symbol)
+    context = ""
+    if quote and "_error" not in quote:
+        context = f"{symbol}: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%)"
+    search = web_search(f"{symbol} ETF holdings flows analysis {datetime.now().strftime('%B %Y')}")
+    if search:
+        context += f"\nETF data:\n{search}"
+    prompt = (f"ETF analysis for {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+              f"Cover: what this ETF tracks, top holdings, expense ratio, fund flows, "
+              f"performance vs benchmark, bull case (sector/theme upside), bear case (risks), "
+              f"who should own this and why.")
+    skill_prompt = get_skill_prompt("/etf")
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    send_message(chat_id, f"<b>{symbol} ETF ANALYSIS</b>\n\n" + response)
+
+
+def handle_squeeze(chat_id, symbol):
+    if not symbol:
+        send_message(chat_id, "❌ Usage: /squeeze GME\nExample: /squeeze BBBY")
+        return
+    symbol = symbol.strip().upper()
+    if not _valid_ticker(symbol):
+        send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>.")
+        return
+    send_message(chat_id, f"Checking short squeeze potential for {symbol}...")
+    quote = get_stock_quote(symbol)
+    context = ""
+    if quote and "_error" not in quote:
+        context = f"{symbol}: ${quote.get('price','N/A')}"
+    search = web_search(f"{symbol} short interest squeeze potential {datetime.now().strftime('%B %Y')}")
+    if search:
+        context += f"\nSqueeze data:\n{search}"
+    prompt = (f"Short squeeze analysis for {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+              f"Cover: short interest %, days to cover, float size, borrow rate, "
+              f"recent price action, squeeze trigger levels, bull case (squeeze scenario + target), "
+              f"bear case (short thesis wins), risk/reward, position sizing.")
+    skill_prompt = get_skill_prompt("/squeeze")
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    send_message(chat_id, f"<b>{symbol} SQUEEZE ANALYSIS</b>\n\n" + response)
+
+
+def handle_ipo(chat_id, symbol):
+    if not symbol:
+        send_message(chat_id, "❌ Usage: /ipo TICKER or /ipo upcoming")
+        return
+    send_message(chat_id, f"Analyzing IPO: {symbol}...")
+    search = web_search(f"{symbol} IPO analysis valuation {datetime.now().strftime('%B %Y')}")
+    context = f"IPO analysis for: {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}"
+    if search:
+        context += f"\nIPO data:\n{search}"
+    prompt = (f"IPO analysis for {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+              f"Cover: business model, IPO price range, valuation vs peers, "
+              f"underwriters, lock-up expiry risk, bull case (growth story), bear case (overvalued/unprofitable), "
+              f"first-day pop potential, whether to buy at IPO vs wait 90 days.")
+    skill_prompt = get_skill_prompt("/ipo")
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    send_message(chat_id, f"<b>{symbol.upper()} IPO ANALYSIS</b>\n\n" + response)
+
+
+def handle_fx(chat_id, pair):
+    if not pair:
+        pair = "DXY"
+    pair = pair.strip().upper()
+    send_message(chat_id, f"Analyzing FX: {pair}...")
+    search = web_search(f"{pair} forex currency analysis {datetime.now().strftime('%B %Y')}")
+    context = f"FX pair/index: {pair}. Today: {datetime.now().strftime('%B %d, %Y')}"
+    if search:
+        context += f"\nFX data:\n{search}"
+    prompt = (f"Forex/currency analysis for {pair}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+              f"Cover: current trend and key levels, central bank policy differential, "
+              f"macro drivers, correlation to equities/gold/commodities, "
+              f"bull case (strengthens), bear case (weakens), what it means for US stocks.")
+    skill_prompt = get_skill_prompt("/fx")
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    send_message(chat_id, f"<b>{pair} FX ANALYSIS</b>\n\n" + response)
+
+
+def handle_commodities(chat_id):
+    send_message(chat_id, "Pulling commodities analysis...")
+    search = web_search(f"commodities oil gold silver copper prices analysis {datetime.now().strftime('%B %Y')}")
+    context = f"Today: {datetime.now().strftime('%B %d, %Y')}"
+    if search:
+        context += f"\nCommodities web data:\n{search}"
+    prompt = (f"Commodities market overview. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+              f"Cover: oil (WTI/Brent) — trend and key levels, gold — safe haven demand vs real yields, "
+              f"silver — industrial vs monetary, copper — economic signal, natural gas, "
+              f"agricultural commodities if noteworthy. Bull case and bear case for each. "
+              f"What commodities are signaling about the broader economy.")
+    skill_prompt = get_skill_prompt("/commodities")
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    send_message(chat_id, f"<b>COMMODITIES OVERVIEW</b>\n{datetime.now().strftime('%b %d, %Y')}\n\n" + response)
+
+
+def handle_premarket(chat_id):
+    send_message(chat_id, "Pulling pre-market intelligence...")
+    search = web_search(f"pre-market movers futures overnight {datetime.now().strftime('%B %d %Y')}")
+    context = f"Today: {datetime.now().strftime('%B %d, %Y')}"
+    if search:
+        context += f"\nPre-market data:\n{search}"
+    prompt = (f"Pre-market brief. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+              f"Cover: S&P 500 / Nasdaq futures direction, overnight catalysts, "
+              f"major pre-market movers (up AND down) and why, key economic data releasing today, "
+              f"what to watch at open, bull case for today's session, bear case for today's session.")
+    skill_prompt = get_skill_prompt("/premarket")
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    send_message(chat_id, f"<b>PRE-MARKET BRIEF</b>\n{datetime.now().strftime('%b %d | %I:%M %p ET')}\n\n" + response)
 
 
 # ─────────────────────────────────────
@@ -950,6 +1256,15 @@ def process_command(chat_id, text):
         "/portfolio":   lambda: handle_portfolio(chat_id, rest),
         "/price":       lambda: handle_price(chat_id, argument),
         "/test":        lambda: handle_test(chat_id),
+        "/technical":   lambda: handle_technical(chat_id, argument),
+        "/options":     lambda: handle_options(chat_id, argument),
+        "/crypto":      lambda: handle_crypto(chat_id, argument),
+        "/etf":         lambda: handle_etf(chat_id, argument),
+        "/squeeze":     lambda: handle_squeeze(chat_id, argument),
+        "/ipo":         lambda: handle_ipo(chat_id, rest),
+        "/fx":          lambda: handle_fx(chat_id, argument),
+        "/commodities": lambda: handle_commodities(chat_id),
+        "/premarket":   lambda: handle_premarket(chat_id),
     }
 
     handler = routes.get(command)
@@ -958,13 +1273,37 @@ def process_command(chat_id, text):
         handler()
         log.info(f"Response sent for command '{command}' to chat {chat_id}")
     else:
-        log.info(f"No route matched '{command}', falling back to Claude for chat {chat_id}")
-        response = ask_claude(
-            text,
-            f"User message via Lumis Capital Telegram bot. Today: {datetime.now().strftime('%B %d, %Y')}"
-        )
+        # Full conversational mode — use history + live data + web search
+        log.info(f"Conversational message from chat {chat_id}: {text!r}")
+        history = _history_get(chat_id)
+        context = f"Today: {datetime.now().strftime('%B %d, %Y %I:%M %p ET')}"
+
+        # Inject live prices if the message mentions markets/tickers
+        text_upper = text.upper()
+        if any(w in text_upper for w in WATCHLIST + ["MARKET", "SPY", "QQQ", "NASDAQ", "S&P", "DOW", "STOCK", "PRICE", "CRYPTO", "BITCOIN", "BTC"]):
+            for symbol in WATCHLIST[:6]:
+                quote = get_stock_quote(symbol)
+                if quote and "_error" not in quote:
+                    context += f"\n{symbol}: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%)"
+
+        # Web search enrichment for specific queries
+        search_query = None
+        if any(w in text_upper for w in ["NEWS", "LATEST", "TODAY", "HAPPENED", "RECENT"]):
+            search_query = f"{text} {datetime.now().strftime('%B %Y')}"
+        elif re.search(r'\b[A-Z]{2,5}\b', text_upper):
+            # Contains a potential ticker
+            tickers_found = re.findall(r'\b[A-Z]{2,5}\b', text_upper)
+            search_query = f"{tickers_found[0]} stock news {datetime.now().strftime('%B %Y')}"
+        if search_query:
+            search = web_search(search_query)
+            if search:
+                context += f"\nWeb data:\n{search}"
+
+        response = ask_claude(text, context, history=history)
+        _history_add(chat_id, "user", text)
+        _history_add(chat_id, "assistant", response)
         send_message(chat_id, response)
-        log.info(f"Claude fallback response sent to chat {chat_id}")
+        log.info(f"Conversational response sent to chat {chat_id}")
 
 
 # ─────────────────────────────────────
@@ -972,6 +1311,7 @@ def process_command(chat_id, text):
 # ─────────────────────────────────────
 _WEBHOOK_PATH = "/webhook"
 _ARGUS_PATH   = "/argus"
+_OSIRIS_PATH  = "/osiris"
 
 # In-memory ticket status store  {ticket_id: "IN PROGRESS" | "DONE" | "BLOCKED: ..."}
 _ticket_status = {}
@@ -997,9 +1337,21 @@ class _WebhookHandler(BaseHTTPRequestHandler):
             try:
                 payload = json.loads(body)
                 threading.Thread(target=_starfire_dispatch, args=(payload,), daemon=True).start()
-                self.wfile.write(json.dumps({"status": "received"}).encode())
+                self.wfile.write(json.dumps({"status": "received", "system": "STARFIRE"}).encode())
             except Exception as e:
                 log.error(f"Argus parse error: {e}")
+                self.wfile.write(json.dumps({"status": "error", "detail": str(e)}).encode())
+
+        elif self.path == _OSIRIS_PATH:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            try:
+                payload = json.loads(body)
+                threading.Thread(target=_osiris_dispatch, args=(payload,), daemon=True).start()
+                self.wfile.write(json.dumps({"status": "received", "system": "OSIRIS"}).encode())
+            except Exception as e:
+                log.error(f"OSIRIS parse error: {e}")
                 self.wfile.write(json.dumps({"status": "error", "detail": str(e)}).encode())
 
         else:
@@ -1011,7 +1363,7 @@ class _WebhookHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
-            self.wfile.write(b"LUMISNOVA ONLINE | Argus Tower: /argus | Telegram: /webhook")
+            self.wfile.write(b"LUMISNOVA ONLINE | STARFIRE: /argus | OSIRIS: /osiris | Telegram: /webhook")
         else:
             self.send_response(404)
             self.end_headers()
@@ -1020,16 +1372,93 @@ class _WebhookHandler(BaseHTTPRequestHandler):
         pass
 
 
+_STARFIRE_BOT = "starfire5_bot"
+_OSIRIS_BOT   = "osiris_prime_bot"
+
+
+def _send_via_token(token, chat_id, text):
+    """Send a message using an arbitrary bot token (for bot-to-bot replies)."""
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    try:
+        requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=10)
+    except Exception as e:
+        log.error(f"_send_via_token error: {e}")
+
+
 def _dispatch(update):
-    message = update.get("message", {})
-    chat_id = message.get("chat", {}).get("id")
-    text = message.get("text", "")
-    if chat_id and text:
-        log.info(f"Webhook update — chat_id={chat_id} text={text!r}")
-        try:
-            process_command(str(chat_id), text)
-        except Exception as e:
-            log.error(f"Error processing command: {e}")
+    global _processed_updates
+
+    # ── Deduplication ───────────────────────────────────────────────
+    update_id = update.get("update_id")
+    if update_id and update_id in _processed_updates:
+        log.warning(f"Duplicate update {update_id} — skipping")
+        return
+    if update_id:
+        _processed_updates.add(update_id)
+        if len(_processed_updates) > 1000:
+            # Keep the last 500 to prevent unbounded growth
+            _processed_updates = set(list(_processed_updates)[-500:])
+
+    message   = update.get("message", {})
+    chat_id   = message.get("chat", {}).get("id")
+    chat_type = message.get("chat", {}).get("type", "private")
+    text      = message.get("text", "")
+    sender    = message.get("from", {})
+    username  = sender.get("username", "")
+    is_bot    = sender.get("is_bot", False)
+
+    if not chat_id or not text:
+        return
+
+    log.info(f"Update {update_id} — chat={chat_id} type={chat_type} from=@{username}")
+
+    try:
+        # ── Ignore own messages ────────────────────────────────────
+        # If sender is a bot that is NOT starfire or osiris, skip entirely
+        if is_bot and username not in (_STARFIRE_BOT, _OSIRIS_BOT):
+            return
+
+        # ── Bot-to-bot: STARFIRE ───────────────────────────────────
+        if username == _STARFIRE_BOT and is_bot:
+            log.info(f"STARFIRE message from group {chat_id}")
+            reply_fn = (lambda msg: _send_via_token(STARFIRE_BOT_TOKEN, chat_id, msg)
+                        if STARFIRE_BOT_TOKEN else lambda msg: send_message(str(chat_id), msg))
+            try:
+                payload = json.loads(text)
+                payload.setdefault("data", {})
+                payload["data"].setdefault("route_reply_to", [chat_id])
+                _starfire_dispatch(payload)
+            except (json.JSONDecodeError, ValueError):
+                result = _execute_starfire_task(text)
+                send_message(str(chat_id), f"<b>LUMISNOVA</b>\n\n{result}")
+            return
+
+        # ── Bot-to-bot: OSIRIS ─────────────────────────────────────
+        if username == _OSIRIS_BOT and is_bot:
+            log.info(f"OSIRIS message from group {chat_id}")
+            try:
+                payload = json.loads(text)
+                payload.setdefault("data", {})
+                payload["data"].setdefault("recipients", [chat_id])
+                _osiris_dispatch(payload)
+            except (json.JSONDecodeError, ValueError):
+                result = _execute_starfire_task(text)
+                send_message(str(chat_id), f"<b>LUMISNOVA</b>\n\n{result}")
+            return
+
+        # ── Group chat: only respond to commands, @mentions, replies ─
+        if chat_type in ("group", "supergroup"):
+            bot_mentioned = "@lumis" in text.lower() or "@lumisnova" in text.lower()
+            is_reply_to_bot = (message.get("reply_to_message", {})
+                               .get("from", {}).get("is_bot", False))
+            is_command = text.startswith("/")
+            if not (is_command or bot_mentioned or is_reply_to_bot):
+                return
+            text = re.sub(r'@\w+', '', text).strip()
+
+        process_command(str(chat_id), text)
+    except Exception as e:
+        log.error(f"Error processing update: {e}")
 
 
 # ─────────────────────────────────────
@@ -1243,6 +1672,76 @@ def _starfire_watchlist():
             arrow = "▲" if change >= 0 else "▼"
             lines.append(f"{arrow} {symbol}: ${price:.2f} ({change:+.2f}%)")
     return "\n".join(lines) if lines else "Watchlist data unavailable."
+
+
+# ─────────────────────────────────────
+# OSIRIS BROADCAST NETWORK
+# ─────────────────────────────────────
+def _osiris_dispatch(payload):
+    """Route incoming OSIRIS commands."""
+    command = payload.get("command", "OSIRIS_BROADCAST")
+    data    = payload.get("data", payload)
+
+    if command == "OSIRIS_BROADCAST":
+        _osiris_broadcast(data)
+    elif command == "OSIRIS_ALERT":
+        _osiris_alert(data)
+    elif command == "OSIRIS_STATUS":
+        _osiris_status_report(data)
+    elif command == "OSIRIS_TASK":
+        # Execute a financial task and broadcast the result
+        task = data.get("task", "")
+        recipients = data.get("recipients", [CHAT_ID])
+        result = _execute_starfire_task(task)
+        subject = data.get("subject", "OSIRIS TASK RESULT")
+        msg = f"<b>OSIRIS — {subject}</b>\n\n{result}"
+        for uid in recipients:
+            send_message(str(uid), msg)
+    else:
+        log.warning(f"OSIRIS: unrecognised command: {payload}")
+
+
+def _osiris_broadcast(data):
+    subject    = data.get("subject", "OSIRIS BROADCAST")
+    body       = data.get("body", "")
+    recipients = data.get("recipients", [CHAT_ID])
+    task       = data.get("task")  # optional: execute a financial task first
+    if task:
+        body = _execute_starfire_task(task)
+    msg = f"<b>OSIRIS — {subject}</b>\n{datetime.now().strftime('%b %d | %I:%M %p ET')}\n\n{body}"
+    for uid in recipients:
+        send_message(str(uid), msg)
+    log.info(f"OSIRIS broadcast '{subject}' → {len(recipients)} recipients")
+
+
+def _osiris_alert(data):
+    ticker     = data.get("ticker", "")
+    alert_type = data.get("type", "PRICE ALERT")
+    message    = data.get("message", "")
+    recipients = data.get("recipients", [CHAT_ID])
+    price_line = ""
+    if ticker:
+        price_line = f"\n{get_stock_price_only(ticker)}"
+    msg = f"<b>OSIRIS ALERT — {alert_type}</b>{price_line}\n{datetime.now().strftime('%b %d | %I:%M %p ET')}\n\n{message}"
+    for uid in recipients:
+        send_message(str(uid), msg)
+    log.info(f"OSIRIS alert '{alert_type}' for {ticker} → {len(recipients)} recipients")
+
+
+def _osiris_status_report(data):
+    recipients = data.get("recipients", [CHAT_ID])
+    status = (f"<b>OSIRIS NETWORK STATUS</b>\n"
+              f"{datetime.now().strftime('%B %d, %Y | %I:%M %p ET')}\n\n"
+              f"LUMISNOVA: ONLINE\n"
+              f"MODEL: {CLAUDE_MODEL}\n"
+              f"STARFIRE CHANNEL (/argus): ACTIVE\n"
+              f"OSIRIS CHANNEL (/osiris): ACTIVE\n"
+              f"TELEGRAM WEBHOOK: CONNECTED\n"
+              f"FMP DATA FEED: LIVE\n"
+              f"WEB SEARCH: {'ACTIVE' if SERPER_API_KEY else 'NOT CONFIGURED'}\n"
+              f"CLAUDE ENGINE: ONLINE")
+    for uid in recipients:
+        send_message(str(uid), status)
 
 
 # ─────────────────────────────────────
