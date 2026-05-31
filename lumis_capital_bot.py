@@ -124,15 +124,30 @@ If someone shares their financial situation, engage with it specifically. Give r
 Challenge bad ideas. Push back on overleveraged sizing. Tell people what they need to hear, not what they want to hear.
 
 ====================================================
-CORE SPECIALIZATION — AI INFRASTRUCTURE OBSESSION
+CORE SPECIALIZATION — SECTOR MASTERY & MARKET INTELLIGENCE
 ====================================================
 
-You are obsessed with AI infrastructure. You continuously monitor:
+You have deep, institutional-level knowledge of every sector. You know the winners, the losers, and where money is rotating — at all times.
 
-AI compute → GPUs → AI accelerators → Data centers → Hyperscaler spending → Cloud infrastructure → Fiber networks → Networking equipment → Power generation → Utilities → Natural gas → Nuclear power → Grid modernization → Cooling infrastructure → Semiconductor supply chains
+SECTOR ROTATION INTELLIGENCE:
+- Which sectors are seeing institutional inflows vs outflows
+- Which are leading vs lagging the broader market
+- Where smart money is positioning and why
+- What the rotation pattern signals about the macro cycle (early cycle, mid cycle, late cycle, recession)
+- Which sectors are historically strong in the current rate/inflation environment
 
-You connect second and third-order effects:
-AI demand → GPU demand → Data center growth → Power demand → Utility investment → Grid expansion → Equipment suppliers
+SECTOR SUPPLY CHAIN MASTERY (second and third-order effects):
+- AI Infrastructure: compute → GPUs → data centers → power demand → utilities → grid → cooling → semiconductors
+- Energy: oil prices → exploration budgets → equipment makers → pipelines → refiners → utilities → grid
+- Financials: yield curve → bank margins → credit quality → insurance float → capital markets activity
+- Healthcare: FDA pipeline → biotech funding cycles → device demand → payer dynamics → pharmacy benefit
+- Consumer: employment → wage growth → spending mix → retail → brands → supply chains → shipping
+- Industrials: CapEx cycles → manufacturing PMI → logistics → construction → commodities → mining
+- Real Estate: rate sensitivity → REITs → homebuilders → mortgage originators → title insurance
+- Technology: AI spend → software adoption → cloud migration → cybersecurity → semiconductor demand
+- Commodities: China demand → DXY → supply/demand balance → inflation pass-through → currency effects
+
+For every sector you always know: who is winning now, who is losing now, what the catalyst is, how long the trade lasts, and when it reverses.
 
 ====================================================
 RESEARCH COVERAGE
@@ -146,9 +161,46 @@ Macro: Inflation, Interest Rates, Labor Markets, Credit Markets, Liquidity, Fisc
 SECTOR ENGINE
 ====================================================
 
-Continuously evaluate: AI Infrastructure, Semiconductors, Utilities, Energy, Cybersecurity, Cloud Computing, Industrials, Financials, Healthcare, Consumer, Real Estate
+Continuously evaluate all 11 sectors:
+AI Infrastructure / Semiconductors / Utilities / Energy / Cybersecurity / Cloud Computing / Industrials / Financials / Healthcare / Consumer / Real Estate
 
-For each sector assess: Momentum, Relative Strength, Earnings Trends, CapEx Trends, Institutional Positioning, Insider Activity, Valuation, Risk.
+For each sector rate: Momentum, Relative Strength vs SPY, Earnings Trend (beat/miss cycle), CapEx Trend, Institutional Positioning (over/underweight), Insider Activity, Valuation vs history, Key Risk.
+
+Always have a current sector ranking: which sectors to overweight, which to underweight, and why.
+
+====================================================
+MARKET SENTIMENT ENGINE
+====================================================
+
+You continuously read market sentiment from multiple dimensions:
+
+FEAR & GREED:
+- VIX level and trend (below 15 = complacency, 15-25 = normal, above 25 = fear, above 40 = panic)
+- Put/call ratio (above 1.0 = bearish sentiment, below 0.7 = bullish/complacent)
+- CNN Fear & Greed Index direction
+- AAII bull/bear survey extremes (contrarian signal at extremes)
+
+BREADTH & INTERNALS:
+- % of S&P 500 stocks above 50MA and 200MA
+- Advance/decline line — confirming or diverging from index?
+- New 52-week highs vs lows ratio
+- Market breadth: is the rally narrow (concentrated) or broad (healthy)?
+
+FLOW OF FUNDS:
+- Equity fund inflows/outflows (retail vs institutional)
+- Money market fund levels (high cash on sidelines = potential fuel)
+- Options market positioning (gamma exposure, dealer hedging flows)
+- Short interest trends across sectors
+
+TECHNICAL SENTIMENT:
+- SPY, QQQ, IWM relative performance (large cap vs small cap tells a story)
+- High yield credit spreads (widening = risk-off signal)
+- Dollar (DXY) strength vs risk assets
+- Gold behavior (flight to safety or inflation hedge?)
+
+When asked about sentiment or market feel, synthesize all of the above into a clear read:
+BULLISH / CAUTIOUSLY BULLISH / NEUTRAL / CAUTIOUSLY BEARISH / BEARISH
+...and explain exactly why.
 
 ====================================================
 PORTFOLIO INTELLIGENCE
@@ -563,10 +615,11 @@ Ask anything — market analysis, stock picks, personal finance, portfolio revie
 
 <b>Or use a command:</b>
 /news /macro /earnings /scout /watchlist /yields
+/sentiment /rotation /premarket /momentum
 /full /opinion /invest /insider /risk /compare
-/dividend /sector /momentum /portfolio /compounding
-/technical /options /crypto /etf /squeeze /ipo
-/fx /commodities /premarket /help
+/dividend /sector /technical /options /crypto
+/etf /squeeze /ipo /fx /commodities /portfolio
+/compounding /help
 
 <b>Network:</b> STARFIRE (/argus) · OSIRIS (/osiris) — ONLINE
 
@@ -943,6 +996,10 @@ def handle_help(chat_id):
 /sector [SECTOR] — Sector deep dive
 /compare [T1] [T2] — Head-to-head comparison
 /momentum — Top momentum plays from watchlist
+
+<b>Sentiment & Rotation:</b>
+/sentiment — Full market sentiment read (VIX, breadth, flows, verdict)
+/rotation — Sector rotation scorecard + where money is moving
 
 <b>Macro & Alternative Markets:</b>
 /crypto [SYMBOL] — Crypto analysis (default: BTC)
@@ -1329,6 +1386,56 @@ def handle_commodities(chat_id):
     send_message(chat_id, f"<b>COMMODITIES OVERVIEW</b>\n{datetime.now().strftime('%b %d, %Y')}\n\n" + response)
 
 
+def handle_sentiment(chat_id):
+    send_message(chat_id, "Reading market sentiment...")
+    rates = get_treasury_rates()
+    context = f"Today: {datetime.now().strftime('%B %d, %Y')}"
+    if rates and "_error" not in rates:
+        context += f"\n10yr yield: {rates.get('year10','N/A')}% | 2yr: {rates.get('year2','N/A')}%"
+    # Pull watchlist prices for breadth read
+    movers = []
+    for symbol in WATCHLIST:
+        quote = get_stock_quote(symbol)
+        if quote and "_error" not in quote:
+            chg = quote.get("changePercentage", 0)
+            movers.append(f"{symbol}: {chg:+.2f}%")
+            context += f"\n{symbol}: ${quote.get('price','N/A')} ({chg:+.2f}%)"
+    search = web_search(f"market sentiment VIX fear greed index {datetime.now().strftime('%B %d %Y')}")
+    if search:
+        context += f"\nSentiment web data:\n{search}"
+    prompt = (f"Full market sentiment read. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+              f"Cover: VIX level and what it signals, put/call ratio, breadth (advancing vs declining), "
+              f"sector rotation (what's leading, what's lagging), fund flows, credit spreads, "
+              f"dollar and gold signals, retail vs institutional positioning. "
+              f"Give me a clear overall verdict: BULLISH / CAUTIOUSLY BULLISH / NEUTRAL / "
+              f"CAUTIOUSLY BEARISH / BEARISH — and exactly why. "
+              f"Where is money rotating INTO right now, and what sectors are being sold.")
+    skill_prompt = get_skill_prompt("/sentiment")
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    send_message(chat_id, f"<b>MARKET SENTIMENT</b>\n{datetime.now().strftime('%b %d | %I:%M %p ET')}\n\n" + response)
+
+
+def handle_rotation(chat_id):
+    send_message(chat_id, "Analyzing sector rotation...")
+    context = f"Today: {datetime.now().strftime('%B %d, %Y')}"
+    rates = get_treasury_rates()
+    if rates and "_error" not in rates:
+        context += f"\n10yr: {rates.get('year10','N/A')}% | 2yr: {rates.get('year2','N/A')}%"
+    search = web_search(f"sector rotation ETF performance flows {datetime.now().strftime('%B %Y')}")
+    if search:
+        context += f"\nSector data:\n{search}"
+    prompt = (f"Sector rotation analysis. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+              f"Give me a ranked list of all 11 sectors: AI Infrastructure, Semiconductors, Utilities, "
+              f"Energy, Cybersecurity, Cloud/Software, Industrials, Financials, Healthcare, Consumer, Real Estate.\n"
+              f"For each: current momentum (hot/cold), relative strength vs SPY, institutional positioning "
+              f"(overweight/underweight), key catalyst or risk, verdict (overweight/neutral/underweight).\n"
+              f"Then give the rotation thesis: what macro conditions are driving the rotation, "
+              f"where smart money is moving NOW, and what sectors are being abandoned.")
+    skill_prompt = get_skill_prompt("/rotation")
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    send_message(chat_id, f"<b>SECTOR ROTATION</b>\n{datetime.now().strftime('%b %d, %Y')}\n\n" + response)
+
+
 def handle_premarket(chat_id):
     send_message(chat_id, "Pulling pre-market intelligence...")
     search = web_search(f"pre-market movers futures overnight {datetime.now().strftime('%B %d %Y')}")
@@ -1391,6 +1498,8 @@ def process_command(chat_id, text):
         "/fx":          lambda: handle_fx(chat_id, argument),
         "/commodities": lambda: handle_commodities(chat_id),
         "/premarket":   lambda: handle_premarket(chat_id),
+        "/sentiment":   lambda: handle_sentiment(chat_id),
+        "/rotation":    lambda: handle_rotation(chat_id),
     }
 
     handler = routes.get(command)
