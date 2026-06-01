@@ -1314,6 +1314,42 @@ def handle_help(chat_id):
     send_message(chat_id, base + (owner_section if owner else "") + footer)
 
 
+def handle_pals(chat_id):
+    railway_domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "")
+    web_link = f"\n\n<b>Web Chat:</b> https://{railway_domain}/chat" if railway_domain else ""
+    msg = (
+        "<b>LUMIS — for the pals</b>\n"
+        "<i>Full AI market analyst. Ask me anything about any stock, sector, or market.</i>"
+        + web_link +
+        "\n\n<b>Research any stock:</b>\n"
+        "/full [TICKER] — Deep analysis: moat, valuation, bull/bear\n"
+        "/technical [TICKER] — Chart analysis, RSI, MACD, levels\n"
+        "/options [TICKER] — Options flow, IV, strategies\n"
+        "/insider [TICKER] — Insider buying/selling activity\n"
+        "/risk [TICKER] — Position risk + sizing for $10K\n"
+        "/invest [TICKER] — Long-term thesis + DCA plan\n"
+        "/opinion [TICKER] — Quick honest take\n"
+        "/squeeze [TICKER] — Short squeeze potential\n"
+        "/compare [T1] [T2] — Head-to-head\n"
+        "/dividend [TICKER] — Dividend sustainability\n\n"
+        "<b>Market intelligence:</b>\n"
+        "/sentiment — VIX, breadth, fund flows, verdict\n"
+        "/rotation — Where money is moving right now\n"
+        "/macro — Fed, rates, big picture\n"
+        "/news — Top stories + what they mean\n"
+        "/premarket — Futures, movers, what to watch\n"
+        "/scout — 3 fresh stock picks this week\n"
+        "/sector [SECTOR] — Sector deep dive\n\n"
+        "<b>Alt markets:</b>\n"
+        "/crypto [SYMBOL] — Crypto analysis\n"
+        "/etf [TICKER] — ETF breakdown\n"
+        "/commodities — Oil, gold, copper\n"
+        "/fx [PAIR] — Forex analysis\n\n"
+        "<i>Just talk to me too — no command needed.</i>"
+    )
+    send_message(chat_id, msg)
+
+
 def handle_sector(chat_id, sector):
     if not sector:
         send_message(chat_id, "❌ Usage: /sector tech\nExamples: /sector energy | /sector healthcare | /sector fintech")
@@ -1855,6 +1891,7 @@ def process_command(chat_id, text):
     routes = {
         "/start":       lambda: handle_start(chat_id),
         "/help":        lambda: handle_help(chat_id),
+        "/pals":        lambda: handle_pals(chat_id),
         "/watchlist":   lambda: handle_watchlist(chat_id) if _is_owner(chat_id) else send_message(chat_id, _OWNER_ONLY_MSG),
         "/yields":      lambda: handle_yields(chat_id),
         "/earnings":    lambda: handle_earnings(chat_id),
