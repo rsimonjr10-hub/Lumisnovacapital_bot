@@ -7,6 +7,7 @@ Telegram Bot for Market Intelligence
 import os
 import re
 import json
+import uuid
 import random
 import requests
 import signal
@@ -54,6 +55,9 @@ _OWNER_ONLY_MSG = (
 )
 
 # Deduplication: track processed update IDs to prevent replay on restart/rolling deploy
+# Unique ID for this process — visible in startup message to detect two-instance conflicts
+_INSTANCE_ID = str(uuid.uuid4())[:8]
+
 _processed_updates: set = set()
 _processed_updates_lock = threading.Lock()   # makes check-and-add atomic across threads
 
@@ -2450,7 +2454,7 @@ def _dispatch(update):
 
     # ── Deduplication (atomic check-and-add under lock) ─────────────
     update_id = update.get("update_id")
-    if update_id:
+    if update_id is not None:
         with _processed_updates_lock:
             if update_id in _processed_updates:
                 log.warning(f"Duplicate update {update_id} — skipping")
@@ -2858,6 +2862,7 @@ def run_bot():
             CHAT_ID,
             f"<b>Lumis Capital Bot Online</b>\n"
             f"{datetime.now().strftime('%B %d, %Y | %I:%M %p ET')}\n"
+            f"Instance: <code>{_INSTANCE_ID}</code>\n"
             f"Type /help for all commands."
         )
 
@@ -2884,6 +2889,7 @@ def run_bot():
             CHAT_ID,
             f"<b>Lumis Capital Bot Online</b>\n"
             f"{datetime.now().strftime('%B %d, %Y | %I:%M %p ET')}\n"
+            f"Instance: <code>{_INSTANCE_ID}</code>\n"
             f"Type /help for all commands."
         )
 
