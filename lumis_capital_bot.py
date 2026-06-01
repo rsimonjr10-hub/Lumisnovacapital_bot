@@ -1851,56 +1851,6 @@ def handle_commodities(chat_id):
     send_message(chat_id, f"<b>COMMODITIES</b>\n<i>Source: FMP Live</i>\n{datetime.now().strftime('%b %d, %Y')}\n\n" + response)
 
 
-def handle_sentiment(chat_id):
-    send_message(chat_id, "Reading market sentiment...")
-    rates = get_treasury_rates()
-    context = f"Today: {datetime.now().strftime('%B %d, %Y')}"
-    if rates and "_error" not in rates:
-        context += f"\n10yr yield: {rates.get('year10','N/A')}% | 2yr: {rates.get('year2','N/A')}%"
-    # Pull watchlist prices for breadth read
-    movers = []
-    for symbol in WATCHLIST:
-        quote = get_stock_quote(symbol)
-        if quote and "_error" not in quote:
-            chg = quote.get("changePercentage", 0)
-            movers.append(f"{symbol}: {chg:+.2f}%")
-            context += f"\n{symbol}: ${quote.get('price','N/A')} ({chg:+.2f}%)"
-    search = web_search(f"market sentiment VIX fear greed index {datetime.now().strftime('%B %d %Y')}")
-    if search:
-        context += f"\nSentiment web data:\n{search}"
-    prompt = (f"Full market sentiment read. Today: {datetime.now().strftime('%B %d, %Y')}\n"
-              f"Cover: VIX level and what it signals, put/call ratio, breadth (advancing vs declining), "
-              f"sector rotation (what's leading, what's lagging), fund flows, credit spreads, "
-              f"dollar and gold signals, retail vs institutional positioning. "
-              f"Give me a clear overall verdict: BULLISH / CAUTIOUSLY BULLISH / NEUTRAL / "
-              f"CAUTIOUSLY BEARISH / BEARISH — and exactly why. "
-              f"Where is money rotating INTO right now, and what sectors are being sold.")
-    skill_prompt = get_skill_prompt("/sentiment")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"<b>MARKET SENTIMENT</b>\n{datetime.now().strftime('%b %d | %I:%M %p ET')}\n\n" + response)
-
-
-def handle_rotation(chat_id):
-    send_message(chat_id, "Analyzing sector rotation...")
-    context = f"Today: {datetime.now().strftime('%B %d, %Y')}"
-    rates = get_treasury_rates()
-    if rates and "_error" not in rates:
-        context += f"\n10yr: {rates.get('year10','N/A')}% | 2yr: {rates.get('year2','N/A')}%"
-    search = web_search(f"sector rotation ETF performance flows {datetime.now().strftime('%B %Y')}")
-    if search:
-        context += f"\nSector data:\n{search}"
-    prompt = (f"Sector rotation analysis. Today: {datetime.now().strftime('%B %d, %Y')}\n"
-              f"Give me a ranked list of all 11 sectors: AI Infrastructure, Semiconductors, Utilities, "
-              f"Energy, Cybersecurity, Cloud/Software, Industrials, Financials, Healthcare, Consumer, Real Estate.\n"
-              f"For each: current momentum (hot/cold), relative strength vs SPY, institutional positioning "
-              f"(overweight/underweight), key catalyst or risk, verdict (overweight/neutral/underweight).\n"
-              f"Then give the rotation thesis: what macro conditions are driving the rotation, "
-              f"where smart money is moving NOW, and what sectors are being abandoned.")
-    skill_prompt = get_skill_prompt("/rotation")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"<b>SECTOR ROTATION</b>\n{datetime.now().strftime('%b %d, %Y')}\n\n" + response)
-
-
 def handle_premarket(chat_id):
     send_message(chat_id, "Pulling pre-market intelligence...")
     commodities = get_commodity_prices()
@@ -2519,6 +2469,14 @@ def _dispatch(update):
 
     if not chat_id or not text:
         return
+
+    # ── Staleness check — drop replayed/retried webhooks ────────────
+    msg_date = message.get("date", 0)
+    if msg_date:
+        age = int(time.time()) - msg_date
+        if age > 60:
+            log.warning(f"Stale message dropped (age={age}s, update_id={update_id})")
+            return
 
     log.info(f"Update {update_id} — chat={chat_id} type={chat_type} from=@{username}")
 
