@@ -40,6 +40,18 @@ CHAT_ACCESS_CODE    = os.environ.get("CHAT_ACCESS_CODE", "") # set in Railway to
 # Most intelligent Claude model
 CLAUDE_MODEL = "claude-opus-4-8"
 
+
+def _is_owner(chat_id) -> bool:
+    """True only if the requesting chat is the configured owner (CHAT_ID)."""
+    return bool(CHAT_ID and str(chat_id) == str(CHAT_ID))
+
+
+_OWNER_ONLY_MSG = (
+    "This command shows personal account data. "
+    "Use /full, /technical, /options, /insider, /sentiment, /rotation, /crypto, "
+    "/sector, /macro, /news, or just ask me about any stock."
+)
+
 # Deduplication: track processed update IDs to prevent replay on restart/rolling deploy
 _processed_updates: set = set()
 
@@ -1247,7 +1259,8 @@ Make it real and motivating."""
 
 
 def handle_help(chat_id):
-    msg = """<b>LUMIS CAPITAL — LUMISNOVA</b>
+    owner = _is_owner(chat_id)
+    base = """<b>LUMIS — Market Intelligence</b>
 <i>Full conversational AI — just talk to me, or use a command.</i>
 
 <b>Market Intelligence:</b>
@@ -1256,55 +1269,49 @@ def handle_help(chat_id):
 /earnings — Upcoming earnings calendar
 /yields — Treasury yield curve
 /premarket — Pre-market brief + futures
+/sentiment — Market sentiment: VIX, breadth, flows, verdict
+/rotation — Sector rotation: where money is moving
 
 <b>Stock Research:</b>
 /full [TICKER] — Deep analysis: moat, valuation, bull/bear
 /opinion [TICKER] — Quick honest take
 /technical [TICKER] — Chart analysis, RSI, MACD, levels
 /options [TICKER] — Options flow, IV, best strategies
-/insider [TICKER] — Insider buying/selling
+/insider [TICKER] — Insider buying/selling activity
 /risk [TICKER] — Position risk check + sizing
 /squeeze [TICKER] — Short squeeze potential
 /ipo [TICKER] — IPO analysis
 
-<b>Market Intelligence:</b>
-/sentiment — Full market sentiment + breadth + VIX
-/rotation — Live sector rotation + where money is moving
-
-<b>Comparison & Sectors:</b>
+<b>Sectors & Comparison:</b>
 /scout — 3 fresh weekly picks (rotates sectors)
 /sector [SECTOR] — Sector deep dive
 /compare [T1] [T2] — Head-to-head comparison
-/momentum — Top momentum plays from watchlist
-
-<b>Sentiment & Rotation:</b>
-/sentiment — Full market sentiment read (VIX, breadth, flows, verdict)
-/rotation — Sector rotation scorecard + where money is moving
 
 <b>Macro & Alternative Markets:</b>
 /crypto [SYMBOL] — Crypto analysis (default: BTC)
 /fx [PAIR] — Forex + DXY analysis
-/commodities — Oil, gold, copper, ag overview
+/commodities — Oil, gold, copper, ags overview
 /etf [TICKER] — ETF holdings, flows, analysis
 
 <b>Investing & Wealth:</b>
 /invest [TICKER] — Long-term analysis + DCA strategy
 /dividend [TICKER] — Dividend sustainability + income math
 /compounding — Wealth building compound math
-/portfolio [ALLOCATION] — Portfolio review + rebalancing
 
 <b>Live Data:</b>
-/watchlist — Live prices for all watchlist names
-/price [TICKER] — Live quote (instant, no AI)
+/price [TICKER] — Live quote (instant, no AI)"""
 
-<b>System:</b>
-/test — Check API connections
+    owner_section = """
 
-<b>Network:</b> STARFIRE (/argus) · OSIRIS (/osiris)
+<b>Owner Commands:</b>
+/watchlist — Live prices for your watchlist
+/momentum — Top momentum plays from your watchlist
+/portfolio [ALLOCATION] — Portfolio review + rebalancing
+/test — Check API connections"""
 
-<i>Powered by Claude Opus + FMP Live Data + Web Search</i>
-<i>Not financial advice. Always do your own research.</i>"""
-    send_message(chat_id, msg)
+    footer = "\n\n<i>Powered by Claude Opus + FMP Live Data + Web Search</i>\n<i>Not financial advice. Always do your own research.</i>"
+
+    send_message(chat_id, base + (owner_section if owner else "") + footer)
 
 
 def handle_sector(chat_id, sector):
@@ -1848,7 +1855,7 @@ def process_command(chat_id, text):
     routes = {
         "/start":       lambda: handle_start(chat_id),
         "/help":        lambda: handle_help(chat_id),
-        "/watchlist":   lambda: handle_watchlist(chat_id),
+        "/watchlist":   lambda: handle_watchlist(chat_id) if _is_owner(chat_id) else send_message(chat_id, _OWNER_ONLY_MSG),
         "/yields":      lambda: handle_yields(chat_id),
         "/earnings":    lambda: handle_earnings(chat_id),
         "/news":        lambda: handle_news(chat_id),
@@ -1863,10 +1870,10 @@ def process_command(chat_id, text):
         "/sector":      lambda: handle_sector(chat_id, rest),
         "/compare":     lambda: handle_compare(chat_id, argument, argument2),
         "/dividend":    lambda: handle_dividend(chat_id, argument),
-        "/momentum":    lambda: handle_momentum(chat_id),
-        "/portfolio":   lambda: handle_portfolio(chat_id, rest),
+        "/momentum":    lambda: handle_momentum(chat_id) if _is_owner(chat_id) else send_message(chat_id, _OWNER_ONLY_MSG),
+        "/portfolio":   lambda: handle_portfolio(chat_id, rest) if _is_owner(chat_id) else send_message(chat_id, _OWNER_ONLY_MSG),
         "/price":       lambda: handle_price(chat_id, argument),
-        "/test":        lambda: handle_test(chat_id),
+        "/test":        lambda: handle_test(chat_id) if _is_owner(chat_id) else send_message(chat_id, _OWNER_ONLY_MSG),
         "/technical":   lambda: handle_technical(chat_id, argument),
         "/options":     lambda: handle_options(chat_id, argument),
         "/crypto":      lambda: handle_crypto(chat_id, argument),
