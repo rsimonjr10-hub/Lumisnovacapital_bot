@@ -15,6 +15,7 @@ import logging
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
+import zoneinfo
 from skills import get_skill_prompt
 
 # Set by SIGTERM/SIGINT — main loop checks this to exit cleanly
@@ -832,6 +833,38 @@ def get_stock_price_only(symbol):
         return f"⚠️ Error fetching price for {symbol.upper()}."
 
 
+_ET = zoneinfo.ZoneInfo("America/New_York")
+
+def _market_session() -> str:
+    """Return 'open', 'premarket', 'afterhours', or 'closed' based on current ET time."""
+    now = datetime.now(_ET)
+    if now.weekday() >= 5:          # Saturday / Sunday
+        return "closed"
+    t = now.hour * 60 + now.minute  # minutes since midnight ET
+    if 240 <= t < 570:              # 4:00 AM – 9:30 AM
+        return "premarket"
+    if 570 <= t < 960:              # 9:30 AM – 4:00 PM
+        return "open"
+    if 960 <= t < 1200:             # 4:00 PM – 8:00 PM
+        return "afterhours"
+    return "closed"
+
+
+def get_extended_price(symbol):
+    """Fetch pre/post market price from FMP stable endpoint. Returns dict or None."""
+    url = f"{_FMP_BASE}/pre-post-market-trade"
+    try:
+        r = requests.get(url, params={"symbol": symbol.upper(), "apikey": FMP_API_KEY}, timeout=8)
+        if r.status_code == 200:
+            data = r.json()
+            item = data[0] if isinstance(data, list) and data else data if isinstance(data, dict) else None
+            return item if item else None
+        return None
+    except Exception as e:
+        log.warning(f"FMP extended price error for {symbol}: {e}")
+        return None
+
+
 # ─────────────────────────────────────
 # CLAUDE AI
 # ─────────────────────────────────────
@@ -1475,8 +1508,45 @@ def handle_price(chat_id, symbol):
     if not _valid_ticker(symbol):
         send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>. Use 1–5 uppercase letters (e.g. NVDA, AAPL).")
         return
-    result = get_stock_price_only(symbol)
-    send_message(chat_id, result)
+
+    session = _market_session()
+    lines = []
+
+    # Regular last price (always shown)
+    quote = get_stock_quote(symbol)
+    if quote and "_error" not in quote:
+        price  = quote.get("price", "N/A")
+        chg    = quote.get("changesPercentage", quote.get("changePercentage", 0)) or 0
+        arrow  = "↑" if chg >= 0 else "↓"
+        prev   = quote.get("previousClose", "")
+        prev_str = f" | Prev close: ${float(prev):.2f}" if prev else ""
+        session_label = {"open": "Market open", "premarket": "Last close", "afterhours": "Last close", "closed": "Last close"}.get(session, "")
+        lines.append(f"<b>{symbol}</b>: ${float(price):.2f} {arrow} {chg:+.2f}%  <i>({session_label})</i>{prev_str}")
+    else:
+        lines.append(get_stock_price_only(symbol))
+
+    # Extended-hours price when market is not open
+    if session in ("premarket", "afterhours", "closed"):
+        ext = get_extended_price(symbol)
+        if ext:
+            ext_price = ext.get("price", ext.get("extendedPrice", ext.get("lastSalePrice")))
+            ext_time  = ext.get("timestamp", ext.get("time", ""))
+            if ext_price:
+                label = "Pre-market" if session == "premarket" else "After-hours"
+                time_str = ""
+                if ext_time:
+                    try:
+                        ts = datetime.fromtimestamp(int(ext_time), tz=_ET)
+                        time_str = f" ({ts.strftime('%I:%M %p ET')})"
+                    except Exception:
+                        pass
+                lines.append(f"{label}: <b>${float(ext_price):.2f}</b>{time_str}")
+
+    if session != "open":
+        session_display = {"premarket": "Pre-market", "afterhours": "After-hours", "closed": "Market closed"}.get(session, "")
+        lines.append(f"<i>{session_display} — NYSE/NASDAQ</i>")
+
+    send_message(chat_id, "\n".join(lines))
 
 
 def handle_test(chat_id):
