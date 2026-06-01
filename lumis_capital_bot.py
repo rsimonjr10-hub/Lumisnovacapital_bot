@@ -35,12 +35,36 @@ ANTHROPIC_API_KEY   = os.environ.get("ANTHROPIC_API_KEY")
 SERPER_API_KEY      = os.environ.get("SERPER_API_KEY")      # Google search via serper.dev
 STARFIRE_BOT_TOKEN  = os.environ.get("STARFIRE_BOT_TOKEN")  # enables direct reply to starfire5_bot
 OSIRIS_BOT_TOKEN    = os.environ.get("OSIRIS_BOT_TOKEN")    # enables direct reply to osiris_prime_bot
+CHAT_ACCESS_CODE    = os.environ.get("CHAT_ACCESS_CODE", "") # set in Railway to protect web chat
 
 # Most intelligent Claude model
 CLAUDE_MODEL = "claude-opus-4-8"
 
 # Deduplication: track processed update IDs to prevent replay on restart/rolling deploy
 _processed_updates: set = set()
+
+# Web chat session history  {session_id: [{"role": ..., "content": ...}]}
+_web_sessions: dict = {}
+_WEB_MAX_HISTORY = 10
+
+# Common English words that should never be treated as stock tickers
+_SKIP_WORDS = {
+    "A", "AN", "AT", "BE", "BY", "DO", "GO", "HE", "IF", "IN", "IS",
+    "IT", "ME", "MY", "NO", "OF", "OK", "ON", "OR", "SO", "TO", "UP",
+    "US", "WE", "BUT", "FOR", "GET", "GOT", "HAS", "HOW", "ITS", "LET",
+    "NOT", "NOW", "OFF", "OLD", "ONE", "OUT", "OWN", "PUT", "SAY", "SEE",
+    "THE", "TOO", "TWO", "USE", "WAS", "WAY", "WHO", "WHY", "YOU",
+    "ALL", "AND", "ARE", "HAD", "HIM", "HIS", "NEW", "OUR", "CAN",
+    "DID", "MAY", "OVER", "THAN", "THAT", "THEM", "THEN", "THEY",
+    "THIS", "WILL", "WITH", "FROM", "JUST", "BEEN", "HAVE", "MORE",
+    "WHAT", "WHEN", "WERE", "ALSO", "BACK", "EACH", "EVEN", "HERE",
+    "INTO", "LOOK", "MAKE", "SAME", "SOME", "SUCH", "TAKE", "TELL",
+    "WELL", "WENT", "DOES", "DONE", "GIVE", "HIGH", "LAST", "LONG",
+    "MUCH", "NEXT", "ONLY", "SAID", "SHOW", "VERY", "WEEK", "YEAR",
+    "NASDAQ", "ABOUT", "AFTER", "AGAIN", "COULD", "FIRST", "FOUND",
+    "GREAT", "THOSE", "THREE", "WHERE", "WHICH", "WHILE", "WOULD",
+    "THEIR", "THERE", "THESE", "THINK", "TODAY", "TRADE", "STOCK",
+}
 
 # ─────────────────────────────────────
 # LOGGING
@@ -1870,22 +1894,6 @@ def process_command(chat_id, text):
         # Inject live prices + FMP fundamentals when tickers are detected
         text_upper = text.upper()
         tickers_found = re.findall(r'\b[A-Z]{2,5}\b', text_upper)
-        # Filter to likely tickers (not common words)
-        _SKIP_WORDS = {"A", "AN", "AT", "BE", "BY", "DO", "GO", "HE", "IF", "IN", "IS",
-                       "IT", "ME", "MY", "NO", "OF", "OK", "ON", "OR", "SO", "TO", "UP",
-                       "US", "WE", "BUT", "FOR", "GET", "GOT", "HAS", "HOW", "ITS", "LET",
-                       "NOT", "NOW", "OFF", "OLD", "ONE", "OUT", "OWN", "PUT", "SAY", "SEE",
-                       "THE", "TOO", "TWO", "USE", "WAS", "WAY", "WHO", "WHY", "YOU",
-                       "ALL", "AND", "ARE", "HAD", "HIM", "HIS", "NEW", "OUR", "CAN",
-                       "DID", "MAY", "OVER", "THAN", "THAT", "THEM", "THEN", "THEY",
-                       "THIS", "WILL", "WITH", "FROM", "JUST", "BEEN", "HAVE", "MORE",
-                       "WHAT", "WHEN", "WERE", "ALSO", "BACK", "EACH", "EVEN", "HERE",
-                       "INTO", "LOOK", "MAKE", "SAME", "SOME", "SUCH", "TAKE", "TELL",
-                       "WELL", "WENT", "DOES", "DONE", "GIVE", "HIGH", "LAST", "LONG",
-                       "MUCH", "NEXT", "ONLY", "SAID", "SHOW", "VERY", "WEEK", "YEAR",
-                       "NASDAQ", "ABOUT", "AFTER", "AGAIN", "COULD", "FIRST", "FOUND",
-                       "GREAT", "THOSE", "THREE", "WHERE", "WHICH", "WHILE", "WOULD",
-                       "THEIR", "THERE", "THESE", "THINK", "TODAY", "TRADE", "STOCK"}
         ticker_candidates = [t for t in tickers_found if t not in _SKIP_WORDS and len(t) >= 2]
 
         market_keywords = ["MARKET", "SPY", "QQQ", "NASDAQ", "S&P", "DOW", "STOCK", "PRICE", "CRYPTO", "BITCOIN", "BTC"]
@@ -1924,6 +1932,230 @@ def process_command(chat_id, text):
 # ─────────────────────────────────────
 # WEBHOOK MODE (Railway deployment)
 # ─────────────────────────────────────
+# ─────────────────────────────────────
+# WEB CHAT INTERFACE (Extended Mode)
+# Friends visit /chat in any browser
+# ─────────────────────────────────────
+_CHAT_HTML = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LUMIS — Market Intelligence</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;height:100vh;display:flex;flex-direction:column}
+#hdr{padding:14px 20px;border-bottom:1px solid #21262d;display:flex;align-items:center;gap:10px;flex-shrink:0}
+#hdr h1{font-size:18px;font-weight:700;color:#00d4aa;letter-spacing:2px}
+#hdr span{font-size:12px;color:#8b949e}
+.dot{width:8px;height:8px;border-radius:50%;background:#00d4aa;flex-shrink:0}
+#gate{flex:1;display:flex;align-items:center;justify-content:center;padding:24px}
+#gbox{background:#161b22;border:1px solid #21262d;border-radius:12px;padding:32px;max-width:340px;width:100%;text-align:center}
+#gbox h2{color:#00d4aa;margin-bottom:6px;font-size:17px}
+#gbox p{color:#8b949e;font-size:13px;margin-bottom:22px}
+#gcin{width:100%;padding:10px 14px;background:#0d1117;border:1px solid #30363d;border-radius:8px;color:#e6edf3;font-size:15px;outline:none;text-align:center;letter-spacing:3px}
+#gcin:focus{border-color:#00d4aa}
+#gbtn{margin-top:10px;width:100%;padding:10px;background:#00d4aa;color:#0d1117;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer}
+#gbtn:hover{background:#00b894}
+#gerr{color:#f85149;font-size:13px;margin-top:8px;display:none}
+#chat{flex:1;display:none;flex-direction:column;min-height:0}
+#msgs{flex:1;overflow-y:auto;padding:14px 20px;display:flex;flex-direction:column;gap:10px}
+.mu{align-self:flex-end;background:#1c2128;border:1px solid #30363d;padding:9px 13px;border-radius:12px 12px 2px 12px;font-size:14px;max-width:65%;word-break:break-word}
+.mb{align-self:flex-start;background:#161b22;border:1px solid #21262d;padding:11px 15px;border-radius:2px 12px 12px 12px;font-size:14px;line-height:1.65;max-width:88%;word-break:break-word}
+.mb b{color:#00d4aa}
+.mb i{color:#8b949e}
+.mb code{background:#0d1117;padding:2px 5px;border-radius:4px;font-family:monospace;font-size:12px}
+.typing{display:flex;gap:4px;padding:4px 2px;align-items:center}
+.typing span{width:6px;height:6px;border-radius:50%;background:#00d4aa;animation:bop 1.2s infinite}
+.typing span:nth-child(2){animation-delay:.2s}
+.typing span:nth-child(3){animation-delay:.4s}
+@keyframes bop{0%,80%,100%{transform:translateY(0)}40%{transform:translateY(-6px)}}
+#chips{padding:6px 20px 8px;display:flex;gap:6px;flex-wrap:wrap;flex-shrink:0}
+.chip{padding:4px 10px;background:#161b22;border:1px solid #21262d;border-radius:20px;font-size:12px;color:#8b949e;cursor:pointer;white-space:nowrap}
+.chip:hover{border-color:#00d4aa;color:#00d4aa}
+#ibar{padding:10px 20px 16px;border-top:1px solid #21262d;display:flex;gap:8px;flex-shrink:0}
+#tin{flex:1;padding:9px 13px;background:#161b22;border:1px solid #30363d;border-radius:8px;color:#e6edf3;font-size:14px;outline:none;resize:none;max-height:110px;line-height:1.5}
+#tin:focus{border-color:#00d4aa}
+#snd{padding:9px 16px;background:#00d4aa;color:#0d1117;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;flex-shrink:0}
+#snd:hover{background:#00b894}
+#snd:disabled{background:#30363d;color:#8b949e;cursor:not-allowed}
+@media(max-width:600px){#msgs,#chips,#ibar{padding-left:12px;padding-right:12px}.mu{max-width:82%}}
+</style>
+</head>
+<body>
+<div id="hdr">
+  <div class="dot"></div>
+  <h1>LUMIS</h1>
+  <span>Market Intelligence Platform</span>
+</div>
+
+<div id="gate">
+  <div id="gbox">
+    <h2>Access Required</h2>
+    <p>Enter your access code to connect to LUMIS</p>
+    <input id="gcin" type="password" placeholder="Access code" autocomplete="off"/>
+    <button id="gbtn" onclick="checkAccess()">Connect</button>
+    <div id="gerr">Invalid code. Try again.</div>
+  </div>
+</div>
+
+<div id="chat">
+  <div id="msgs"></div>
+  <div id="chips">
+    <span class="chip" onclick="fill(this)">Analyze NVDA</span>
+    <span class="chip" onclick="fill(this)">Is AAPL a buy?</span>
+    <span class="chip" onclick="fill(this)">TSLA insider activity</span>
+    <span class="chip" onclick="fill(this)">Best sector right now</span>
+    <span class="chip" onclick="fill(this)">Market sentiment today</span>
+    <span class="chip" onclick="fill(this)">BTC analysis</span>
+  </div>
+  <div id="ibar">
+    <textarea id="tin" rows="1" placeholder="Ask about any stock, sector, macro, insiders..." onkeydown="onKey(event)" oninput="resize(this)"></textarea>
+    <button id="snd" onclick="send()">Send</button>
+  </div>
+</div>
+
+<script>
+const NEEDS_CODE=ACCESS_CODE_PLACEHOLDER;
+let sid=Math.random().toString(36).slice(2)+Date.now().toString(36);
+let code='';
+
+window.onload=function(){if(!NEEDS_CODE)openChat();};
+
+function checkAccess(){
+  const c=document.getElementById('gcin').value.trim();
+  if(!c)return;
+  fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({message:'__auth__',session_id:sid,access_code:c})})
+  .then(r=>r.json()).then(d=>{
+    if(d.ok){code=c;openChat(d.response);}
+    else{const e=document.getElementById('gerr');e.style.display='block';}
+  }).catch(()=>{const e=document.getElementById('gerr');e.textContent='Connection error.';e.style.display='block';});
+}
+document.getElementById('gcin').addEventListener('keydown',e=>{if(e.key==='Enter')checkAccess();});
+
+function openChat(welcome){
+  document.getElementById('gate').style.display='none';
+  document.getElementById('chat').style.display='flex';
+  if(welcome)addMsg('mb',welcome);
+}
+
+function addMsg(cls,html,raw){
+  const d=document.createElement('div');
+  d.className='msg '+cls;
+  if(cls==='mu')d.textContent=html;else d.innerHTML=html;
+  document.getElementById('msgs').appendChild(d);
+  d.scrollIntoView({behavior:'smooth',block:'end'});
+  return d;
+}
+
+function showTyping(){
+  const d=document.createElement('div');
+  d.className='msg mb';d.id='typ';
+  d.innerHTML='<div class="typing"><span></span><span></span><span></span></div>';
+  document.getElementById('msgs').appendChild(d);
+  d.scrollIntoView({behavior:'smooth',block:'end'});
+}
+function rmTyping(){const t=document.getElementById('typ');if(t)t.remove();}
+
+function fill(el){document.getElementById('tin').value=el.textContent;document.getElementById('tin').focus();}
+function onKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}}
+function resize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,110)+'px';}
+
+function send(){
+  const inp=document.getElementById('tin');
+  const txt=inp.value.trim();if(!txt)return;
+  inp.value='';inp.style.height='auto';
+  document.getElementById('snd').disabled=true;
+  addMsg('mu',txt);
+  showTyping();
+  fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({message:txt,session_id:sid,access_code:code})})
+  .then(r=>r.json()).then(d=>{
+    rmTyping();
+    if(d.ok)addMsg('mb',d.response);
+    else addMsg('mb','<i>Error: '+(d.error||'Unknown error')+'</i>');
+  }).catch(()=>{rmTyping();addMsg('mb','<i>Connection error. Please try again.</i>');})
+  .finally(()=>{document.getElementById('snd').disabled=false;inp.focus();});
+}
+</script>
+</body>
+</html>
+"""
+
+
+def _handle_web_chat(body_bytes):
+    """Handle POST /api/chat from the web interface."""
+    try:
+        data       = json.loads(body_bytes)
+        message    = data.get("message", "").strip()
+        session_id = data.get("session_id", "anonymous")
+        access_code = data.get("access_code", "")
+
+        # Validate access code if one is configured
+        if CHAT_ACCESS_CODE and access_code != CHAT_ACCESS_CODE:
+            return {"ok": False, "error": "Invalid access code"}
+
+        # Auth ping — just confirm connection
+        if message == "__auth__":
+            return {"ok": True, "response": (
+                "<b>LUMIS online.</b> Ask me anything — stocks, sectors, insiders, "
+                "macro, crypto, options, or just talk markets."
+            )}
+
+        if not message:
+            return {"ok": False, "error": "Empty message"}
+
+        # Per-session history
+        history = _web_sessions.get(session_id, [])
+
+        # Build context (same logic as conversational fallback)
+        context = f"Today: {datetime.now().strftime('%B %d, %Y %I:%M %p ET')}"
+        text_upper = message.upper()
+        tickers_found = re.findall(r'\b[A-Z]{2,5}\b', text_upper)
+        ticker_candidates = [t for t in tickers_found if t not in _SKIP_WORDS and len(t) >= 2]
+
+        market_keywords = ["MARKET", "SPY", "QQQ", "NASDAQ", "S&P", "DOW", "STOCK", "PRICE", "CRYPTO", "BITCOIN", "BTC"]
+        if any(w in text_upper for w in WATCHLIST + market_keywords):
+            for sym in WATCHLIST[:5]:
+                q = get_stock_quote(sym)
+                if q and "_error" not in q:
+                    context += f"\n{sym}: ${q.get('price','N/A')} ({q.get('changePercentage',0):+.2f}%)"
+        elif ticker_candidates:
+            primary = ticker_candidates[0]
+            q       = get_stock_quote(primary)
+            m       = get_key_metrics(primary)
+            fdata   = _fmt_fundamentals(primary, q, m)
+            if fdata:
+                context += f"\n{fdata}"
+
+        search_query = None
+        if any(w in text_upper for w in ["NEWS", "LATEST", "TODAY", "HAPPENED", "RECENT"]):
+            search_query = f"{message} {datetime.now().strftime('%B %Y')}"
+        elif ticker_candidates:
+            search_query = f"{ticker_candidates[0]} stock news {datetime.now().strftime('%B %Y')}"
+        if search_query:
+            found = web_search(search_query)
+            if found:
+                context += f"\nWeb data:\n{found}"
+
+        response = ask_claude(message, context, history=history)
+
+        # Update session history
+        history = history + [
+            {"role": "user", "content": message},
+            {"role": "assistant", "content": response},
+        ]
+        _web_sessions[session_id] = history[-((_WEB_MAX_HISTORY * 2)):]
+
+        return {"ok": True, "response": response}
+
+    except Exception as e:
+        log.error(f"Web chat error: {e}")
+        return {"ok": False, "error": "Internal error"}
+
+
 _WEBHOOK_PATH = "/webhook"
 _ARGUS_PATH   = "/argus"
 _OSIRIS_PATH  = "/osiris"
@@ -1969,16 +2201,40 @@ class _WebhookHandler(BaseHTTPRequestHandler):
                 log.error(f"OSIRIS parse error: {e}")
                 self.wfile.write(json.dumps({"status": "error", "detail": str(e)}).encode())
 
+        elif self.path == "/api/chat":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result = _handle_web_chat(body)
+            self.wfile.write(json.dumps(result).encode())
+
         else:
             self.send_response(404)
             self.end_headers()
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
 
     def do_GET(self):
         if self.path == "/":
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
-            self.wfile.write(b"LUMISNOVA ONLINE | STARFIRE: /argus | OSIRIS: /osiris | Telegram: /webhook")
+            self.wfile.write(b"LUMISNOVA ONLINE | STARFIRE: /argus | OSIRIS: /osiris | Telegram: /webhook | Web: /chat")
+        elif self.path == "/chat":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            html = _CHAT_HTML.replace(
+                "ACCESS_CODE_PLACEHOLDER",
+                "true" if CHAT_ACCESS_CODE else "false"
+            )
+            self.wfile.write(html.encode("utf-8"))
         else:
             self.send_response(404)
             self.end_headers()
