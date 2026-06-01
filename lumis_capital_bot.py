@@ -55,6 +55,7 @@ _OWNER_ONLY_MSG = (
 
 # Deduplication: track processed update IDs to prevent replay on restart/rolling deploy
 _processed_updates: set = set()
+_processed_updates_lock = threading.Lock()   # makes check-and-add atomic across threads
 
 # Web chat session history  {session_id: [{"role": ..., "content": ...}]}
 _web_sessions: dict = {}
@@ -2497,16 +2498,16 @@ def _send_via_token(token, chat_id, text):
 def _dispatch(update):
     global _processed_updates
 
-    # ── Deduplication ───────────────────────────────────────────────
+    # ── Deduplication (atomic check-and-add under lock) ─────────────
     update_id = update.get("update_id")
-    if update_id and update_id in _processed_updates:
-        log.warning(f"Duplicate update {update_id} — skipping")
-        return
     if update_id:
-        _processed_updates.add(update_id)
-        if len(_processed_updates) > 1000:
-            # Keep the last 500 to prevent unbounded growth
-            _processed_updates = set(list(_processed_updates)[-500:])
+        with _processed_updates_lock:
+            if update_id in _processed_updates:
+                log.warning(f"Duplicate update {update_id} — skipping")
+                return
+            _processed_updates.add(update_id)
+            if len(_processed_updates) > 1000:
+                _processed_updates = set(list(_processed_updates)[-500:])
 
     message   = update.get("message", {})
     chat_id   = message.get("chat", {}).get("id")
