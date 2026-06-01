@@ -361,16 +361,41 @@ def _valid_ticker(symbol):
 # ─────────────────────────────────────
 def send_message(chat_id, text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
-    try:
-        response = requests.post(url, json=payload, timeout=30)
-        result = response.json()
-        if not result.get("ok"):
-            log.error(f"Telegram error: {result}")
-        return result
-    except Exception as e:
-        log.error(f"Send message error: {e}")
-        return None
+    _TELEGRAM_LIMIT = 4096
+
+    def _post(chunk):
+        try:
+            response = requests.post(url, json={"chat_id": chat_id, "text": chunk, "parse_mode": "HTML"}, timeout=30)
+            result = response.json()
+            if not result.get("ok"):
+                log.error(f"Telegram error: {result}")
+            return result
+        except Exception as e:
+            log.error(f"Send message error: {e}")
+            return None
+
+    if len(text) <= _TELEGRAM_LIMIT:
+        return _post(text)
+
+    # Split on newlines to avoid cutting mid-word/mid-tag
+    lines = text.split("\n")
+    chunk = ""
+    last_result = None
+    for line in lines:
+        candidate = chunk + ("\n" if chunk else "") + line
+        if len(candidate) > _TELEGRAM_LIMIT:
+            if chunk:
+                last_result = _post(chunk)
+            # If a single line itself is too long, hard-split it
+            while len(line) > _TELEGRAM_LIMIT:
+                last_result = _post(line[:_TELEGRAM_LIMIT])
+                line = line[_TELEGRAM_LIMIT:]
+            chunk = line
+        else:
+            chunk = candidate
+    if chunk:
+        last_result = _post(chunk)
+    return last_result
 
 
 def get_updates(offset=None, timeout=8):
