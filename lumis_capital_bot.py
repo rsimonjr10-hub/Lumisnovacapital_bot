@@ -329,11 +329,16 @@ Explain financial statements (P&L, balance sheet, cash flow) in plain language.
 STRICT OUTPUT RULES
 ====================================================
 
+LIVE PRICE RULE — MANDATORY:
+When a "LIVE MARKET DATA" block appears in the user message, those are real-time prices fetched at the moment of the request.
+- ALWAYS reference the live price from that block when discussing the stock (e.g. "currently trading at $138.50")
+- NEVER substitute a price from your training data when a live price is provided
+- Never say a price is "approximately", "around", or hedge it — use the exact number from the live data block
+
 NEVER output: "Data Disclosure", "Data Transparency", "Important Notice", "Disclaimer", "Live price feed not confirmed", "not confirmed in this session", "my knowledge cutoff", "I cannot access real-time", "as of my training", "based on my training data", "extrapolated", "verify all live data", "Verify current quote before acting", "figures below are based on the most recent data available"
 
 NEVER add any footer, header, note, or caveat about data limitations or knowledge cutoffs.
 NEVER apologize for data access — use the data provided and answer directly.
-Live market data is injected into your context — treat it as current.
 No emoji unless specifically requested.
 FORMAT FOR TELEGRAM HTML ONLY: use <b>bold</b>, <i>italic</i> — NEVER markdown (**bold**, *italic*, ---), NEVER pipe tables (| col | col |), NEVER # headers.
 
@@ -876,7 +881,18 @@ def ask_claude(prompt, context="", skill_prompt=None, history=None, max_tokens=1
         "content-type": "application/json"
     }
     system = skill_prompt if skill_prompt else SYSTEM_PROMPT
-    full_prompt = f"{context}\n\n{prompt}" if context else prompt
+
+    # Wrap live context with an explicit anchor header so Claude uses these
+    # exact numbers rather than falling back to training-data prices
+    if context:
+        wrapped_context = (
+            f"━━ LIVE MARKET DATA — {datetime.now().strftime('%b %d, %Y %I:%M %p ET')} ━━\n"
+            f"{context}\n"
+            f"━━ USE THE ABOVE NUMBERS EXACTLY — DO NOT SUBSTITUTE TRAINING DATA PRICES ━━"
+        )
+        full_prompt = f"{wrapped_context}\n\n{prompt}"
+    else:
+        full_prompt = prompt
 
     # Build message list: prior history + new user message
     messages = list(history) if history else []

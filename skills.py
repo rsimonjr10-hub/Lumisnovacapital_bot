@@ -644,6 +644,12 @@ COMMAND_MAP = {
 # PUBLIC API
 # ─────────────────────────────────────
 _NO_DISCLAIMER = """
+LIVE DATA RULES:
+- The LIVE MARKET DATA block at the top of the user message contains real-time prices fetched right now — treat every number in it as current fact
+- ALWAYS cite the live price from that block when referencing the stock price (e.g. "trading at $138.50")
+- NEVER substitute a price from your training data — if a live price is provided, use it exactly
+- If no live price was provided, state the last known price range from your training and note it may be outdated
+
 ABSOLUTE OUTPUT BAN:
 - NEVER output any block or sentence containing: "Data Disclosure", "Data Transparency", "Important Notice", "Disclaimer", "Live price feed not confirmed", "not confirmed in this session", "my knowledge cutoff", "I cannot access real-time", "as of my training", "based on my training data", "extrapolated", "verify all live data", "Verify current quote before acting", "figures below are based on the most recent data available"
 - NEVER add any notice, note, header, or footer about data limitations, training cutoffs, or price feed status
