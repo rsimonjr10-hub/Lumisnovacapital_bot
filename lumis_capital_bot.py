@@ -1968,10 +1968,90 @@ def handle_rotation(chat_id):
 
 
 # ─────────────────────────────────────
+# STARFIRE TELEGRAM TICKET PARSER
+# ─────────────────────────────────────
+def _parse_telegram_ticket(text):
+    """
+    Detect and parse a STARFIRE formatted ticket sent as a Telegram message.
+    Returns a dict or None if the message is not a ticket.
+    """
+    upper = text.upper()
+    # Must mention STARFIRE and either LUMISNOVA or TICKET
+    if "STARFIRE" not in upper:
+        return None
+    if "TICKET" not in upper and "LUMISNOVA" not in upper:
+        return None
+
+    ticket = {}
+
+    # Ticket number
+    m = re.search(r'Ticket\s*#(\d+)', text, re.IGNORECASE)
+    ticket["number"] = int(m.group(1)) if m else None
+
+    # Title — first non-empty line after "assigned"
+    m = re.search(r'assigned[^\n]*\n+\s*([^\n]+)', text, re.IGNORECASE)
+    ticket["title"] = m.group(1).strip() if m else "STARFIRE Task"
+
+    # Task body — everything between title line and "Priority:" / "Fetch via:"
+    m = re.search(
+        r'assigned[^\n]*\n+\s*[^\n]+\n+(.*?)(?:Priority:|Fetch via:|$)',
+        text, re.IGNORECASE | re.DOTALL
+    )
+    ticket["task"] = m.group(1).strip() if m else text
+
+    # Priority
+    m = re.search(r'Priority:\s*(\d+)', text, re.IGNORECASE)
+    ticket["priority"] = int(m.group(1)) if m else None
+
+    return ticket if (ticket["title"] or ticket["task"]) else None
+
+
+def _execute_telegram_ticket(chat_id, ticket):
+    """Acknowledge a Telegram-format STARFIRE ticket and execute the task."""
+    num_str    = f"#{ticket['number']}" if ticket.get("number") else ""
+    title      = ticket.get("title", "Task")
+    priority   = ticket.get("priority")
+    task       = ticket.get("task") or title
+
+    pri_str    = f" | Priority: {priority}/10" if priority else ""
+    send_message(chat_id, f"Ticket {num_str} acknowledged. <b>{title}</b>{pri_str}\nPulling data and building report...")
+
+    # Store ticket number for status tracking
+    tid = ticket.get("number", "telegram")
+    _ticket_status[tid] = "IN PROGRESS"
+
+    # Build rich context using _execute_starfire_task infrastructure
+    result = _execute_starfire_task(f"{title}. {task}")
+
+    send_message(chat_id, f"<b>TICKET {num_str} — {title.upper()}</b>\n<i>LUMISNOVA Report</i>\n\n{result}")
+    send_message(chat_id, f"Ticket {num_str} COMPLETE. Report delivered.")
+    _ticket_status[tid] = "DONE"
+    _pending_telegram_tickets.pop(chat_id, None)
+
+
+# ─────────────────────────────────────
 # COMMAND ROUTER
 # ─────────────────────────────────────
 def process_command(chat_id, text):
     text = text.strip()
+
+    # ── STARFIRE ticket detection (formatted Telegram message) ────────
+    ticket = _parse_telegram_ticket(text)
+    if ticket:
+        _pending_telegram_tickets[chat_id] = ticket
+        threading.Thread(target=_execute_telegram_ticket, args=(chat_id, ticket), daemon=True).start()
+        return
+
+    # ── "complete ticket" shorthand — execute the last pending ticket ─
+    text_low = text.lower()
+    if any(p in text_low for p in ("complete ticket", "execute ticket", "work on ticket", "run ticket", "do the ticket")):
+        pending = _pending_telegram_tickets.get(chat_id)
+        if pending:
+            threading.Thread(target=_execute_telegram_ticket, args=(chat_id, pending), daemon=True).start()
+        else:
+            send_message(chat_id, "No pending ticket found. Send a STARFIRE ticket first.")
+        return
+
     parts = text.split()
     command = parts[0].lower() if parts else ""
     # Strip @BotName suffix if present (e.g. /start@LumisCapitalBot)
@@ -2301,6 +2381,9 @@ _OSIRIS_PATH  = "/osiris"
 
 # In-memory ticket status store  {ticket_id: "IN PROGRESS" | "DONE" | "BLOCKED: ..."}
 _ticket_status = {}
+
+# Last pending Telegram-format ticket per chat  {chat_id_str: ticket_dict}
+_pending_telegram_tickets = {}
 
 class _WebhookHandler(BaseHTTPRequestHandler):
     def do_POST(self):
