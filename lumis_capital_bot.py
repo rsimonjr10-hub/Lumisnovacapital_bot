@@ -955,6 +955,127 @@ def ask_claude(prompt, context="", skill_prompt=None, history=None, max_tokens=1
         return "⚠️ Lumis Nova is temporarily unavailable. Try again in a moment."
 
 
+def ask_claude_reasoning(prompt, context="", skill_prompt=None, thinking_budget=8000):
+    """ask_claude with extended thinking enabled — falls back to standard on any error."""
+    url = "https://api.anthropic.com/v1/messages"
+    headers = {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "interleaved-thinking-2025-05-14",
+        "content-type": "application/json"
+    }
+    system = skill_prompt if skill_prompt else SYSTEM_PROMPT
+    if context:
+        wrapped = (
+            f"━━ LIVE MARKET DATA — {datetime.now().strftime('%b %d, %Y %I:%M %p ET')} ━━\n"
+            f"{context}\n"
+            f"━━ USE THE ABOVE NUMBERS EXACTLY — DO NOT SUBSTITUTE TRAINING DATA PRICES ━━"
+        )
+        full_prompt = f"{wrapped}\n\n{prompt}"
+    else:
+        full_prompt = prompt
+
+    max_tokens = thinking_budget + 2000
+    payload = {
+        "model": CLAUDE_MODEL,
+        "max_tokens": max_tokens,
+        "thinking": {"type": "enabled", "budget_tokens": thinking_budget},
+        "system": system,
+        "messages": [{"role": "user", "content": full_prompt}]
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=120)
+        if response.status_code != 200:
+            log.warning(f"Reasoning API {response.status_code} — falling back to standard")
+            return ask_claude(prompt, context, skill_prompt=skill_prompt)
+        data = response.json()
+        texts = [b["text"] for b in data.get("content", []) if b.get("type") == "text"]
+        return "\n".join(texts) if texts else ask_claude(prompt, context, skill_prompt=skill_prompt)
+    except Exception as e:
+        log.error(f"Reasoning API error: {e} — falling back to standard")
+        return ask_claude(prompt, context, skill_prompt=skill_prompt)
+
+
+# ─────────────────────────────────────
+# ALGORITHMIC INDICATOR HELPERS
+# ─────────────────────────────────────
+def _calc_rsi(prices, period=14):
+    if len(prices) < period + 1:
+        return None
+    gains, losses = [], []
+    for i in range(1, len(prices)):
+        d = prices[i] - prices[i - 1]
+        gains.append(max(d, 0))
+        losses.append(max(-d, 0))
+    avg_g = sum(gains[:period]) / period
+    avg_l = sum(losses[:period]) / period
+    for i in range(period, len(gains)):
+        avg_g = (avg_g * (period - 1) + gains[i]) / period
+        avg_l = (avg_l * (period - 1) + losses[i]) / period
+    if avg_l == 0:
+        return 100.0
+    return round(100 - (100 / (1 + avg_g / avg_l)), 2)
+
+
+def _calc_ema(prices, period):
+    if len(prices) < period:
+        return None
+    k = 2.0 / (period + 1)
+    ema = sum(prices[:period]) / period
+    for p in prices[period:]:
+        ema = p * k + ema * (1 - k)
+    return round(ema, 4)
+
+
+def _calc_macd(prices):
+    if len(prices) < 35:
+        return None, None, None
+    macd_vals = []
+    for i in range(26, len(prices) + 1):
+        e12 = _calc_ema(prices[:i], 12)
+        e26 = _calc_ema(prices[:i], 26)
+        if e12 is not None and e26 is not None:
+            macd_vals.append(e12 - e26)
+    if not macd_vals:
+        return None, None, None
+    line = macd_vals[-1]
+    signal = _calc_ema(macd_vals, 9) if len(macd_vals) >= 9 else None
+    hist = round(line - signal, 4) if signal is not None else None
+    return round(line, 4), (round(signal, 4) if signal is not None else None), hist
+
+
+def _calc_bollinger(prices, period=20):
+    if len(prices) < period:
+        return None, None, None
+    recent = prices[-period:]
+    mid = sum(recent) / period
+    std = (sum((p - mid) ** 2 for p in recent) / period) ** 0.5
+    return round(mid - 2 * std, 2), round(mid, 2), round(mid + 2 * std, 2)
+
+
+def _calc_historical_volatility(prices, trading_days=252):
+    """Annualized historical volatility from daily close-to-close log returns."""
+    if len(prices) < 10:
+        return None
+    import math
+    rets = [math.log(prices[i] / prices[i - 1]) for i in range(1, len(prices)) if prices[i - 1] > 0]
+    if len(rets) < 2:
+        return None
+    mean = sum(rets) / len(rets)
+    var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
+    daily_vol = var ** 0.5
+    return round(daily_vol * (trading_days ** 0.5) * 100, 2)   # annualized %
+
+
+def _calc_expected_move(price, annual_vol_pct, days):
+    """1-standard-deviation expected move over `days` given annualized vol %."""
+    if not price or annual_vol_pct is None:
+        return None
+    import math
+    move = price * (annual_vol_pct / 100) * math.sqrt(days / 365.0)
+    return round(move, 2)
+
+
 # ─────────────────────────────────────
 # COMMAND HANDLERS
 # ─────────────────────────────────────
@@ -1370,6 +1491,7 @@ def handle_help(chat_id):
 /options [TICKER] — Options flow, IV, best strategies
 /insider [TICKER] — Insider buying/selling activity
 /risk [TICKER] — Position risk check + sizing
+/ta [TICKER] [BUY/SELL] [QTY] [@PRICE] — Algorithmic trade analysis (RSI, MACD, SMA, BB + reasoning)
 /squeeze [TICKER] — Short squeeze potential
 /ipo [TICKER] — IPO analysis
 
@@ -1418,6 +1540,7 @@ def handle_pals(chat_id):
         "/options [TICKER] — Options flow, IV, strategies\n"
         "/insider [TICKER] — Insider buying/selling activity\n"
         "/risk [TICKER] — Position risk + sizing for $10K\n"
+        "/ta [TICKER] [BUY/SELL] [QTY] [@PRICE] — Algorithmic trade analysis\n"
         "/invest [TICKER] — Long-term thesis + DCA plan\n"
         "/opinion [TICKER] — Quick honest take\n"
         "/squeeze [TICKER] — Short squeeze potential\n"
@@ -1711,20 +1834,76 @@ def handle_options(chat_id, symbol):
         send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>.")
         return
     send_message(chat_id, f"Analyzing options activity for {symbol}...")
-    quote = get_stock_quote(symbol)
-    context = ""
+    quote   = get_stock_quote(symbol)
+    metrics = get_key_metrics(symbol)
+    hist    = get_historical_prices(symbol, days=90)
+
+    context = f"{symbol} — Today: {datetime.now().strftime('%B %d, %Y')}\n"
+    current_price = None
     if quote and "_error" not in quote:
-        context = f"{symbol}: ${quote.get('price','N/A')}"
+        current_price = quote.get("price")
+        context += (
+            f"Price: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%) | "
+            f"Beta: {quote.get('beta','N/A')} | "
+            f"Volume: {quote.get('volume','N/A')} | Avg Vol: {quote.get('avgVolume','N/A')} | "
+            f"52wk ${quote.get('yearLow','N/A')}–${quote.get('yearHigh','N/A')}\n"
+        )
+
+    # ── Computed volatility + expected moves (real math, not guessed) ───
+    hv = None
+    if hist:
+        sorted_hist = sorted(hist, key=lambda x: x.get("date", ""))
+        closes = [d["close"] for d in sorted_hist if d.get("close")]
+        if len(closes) >= 20:
+            hv30 = _calc_historical_volatility(closes[-30:]) if len(closes) >= 30 else None
+            hv = _calc_historical_volatility(closes)
+            if hv is not None:
+                context += f"Historical Volatility (annualized): {hv}%"
+                if hv30 is not None:
+                    context += f" | 30-day HV: {hv30}%"
+                context += "\n"
+            if current_price and hv is not None:
+                em_week  = _calc_expected_move(current_price, hv, 7)
+                em_month = _calc_expected_move(current_price, hv, 30)
+                if em_week:
+                    context += (f"Expected move (1σ): ±${em_week} weekly "
+                                f"(${current_price - em_week:.2f}–${current_price + em_week:.2f})\n")
+                if em_month:
+                    context += (f"Expected move (1σ): ±${em_month} monthly "
+                                f"(${current_price - em_month:.2f}–${current_price + em_month:.2f})\n")
+            rsi = _calc_rsi(closes)
+            if rsi is not None:
+                context += f"RSI(14): {rsi}\n"
+            bb_lower, bb_mid, bb_upper = _calc_bollinger(closes)
+            if bb_upper:
+                context += f"Bollinger Bands(20): ${bb_lower} / ${bb_mid} / ${bb_upper}\n"
+
+    if metrics:
+        context += f"Market Cap: {metrics.get('marketCap','N/A')} | P/E: {metrics.get('peRatio','N/A')}\n"
+
     search = web_search(f"{symbol} options flow unusual activity IV {datetime.now().strftime('%B %Y')}")
     if search:
-        context += f"\nOptions data:\n{search}"
-    prompt = (f"Options analysis for {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
-              f"Cover: implied volatility (current vs historical), key strikes, put/call ratio, "
-              f"unusual activity if any, best options strategies for bull/bear scenarios, "
-              f"expected move, Greeks overview. Real risk/reward.")
+        context += f"Options flow / web data:\n{search}"
+
+    prompt = (
+        f"Options analysis for {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+        f"Use the computed Historical Volatility and Expected Move numbers above as your data anchor — "
+        f"these are calculated from real price history, treat them as fact.\n\n"
+        f"Cover precisely:\n"
+        f"1. IV context: compare likely current IV to the computed HV — is premium rich or cheap?\n"
+        f"2. Expected move: reference the computed 1σ weekly and monthly ranges for strike selection\n"
+        f"3. Key strikes: suggest specific strikes around the expected-move boundaries (round to liquid strikes)\n"
+        f"4. Put/call positioning and what it implies\n"
+        f"5. BULL strategy: exact structure, strikes, expiry, max profit/loss, breakeven\n"
+        f"6. BEAR strategy: exact structure, strikes, expiry, max profit/loss, breakeven\n"
+        f"7. Neutral/premium-selling play if IV looks elevated vs HV\n"
+        f"8. Risk: assignment, IV crush near earnings, liquidity\n\n"
+        f"Every strike and target must tie back to the computed price and expected move. "
+        f"Keep response under 3800 characters."
+    )
     skill_prompt = get_skill_prompt("/options")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"<b>{symbol} OPTIONS ANALYSIS</b>\n\n" + response)
+    send_message(chat_id, f"<b>{symbol} OPTIONS ANALYSIS</b>\n<i>Source: FMP Live + Computed Vol</i>\n\n" + response)
 
 
 def handle_crypto(chat_id, symbol):
@@ -1950,6 +2129,185 @@ def handle_rotation(chat_id):
     send_message(chat_id, f"<b>SECTOR ROTATION</b>\n<i>Source: FMP Live + Web</i>\n{datetime.now().strftime('%b %d, %Y')}\n\n" + response)
 
 
+def handle_ta(chat_id, args):
+    """
+    /ta TICKER DIRECTION [QTY] [@PRICE]
+    Examples:
+      /ta NVDA BUY 10 @145.50
+      /ta ASTS LONG 50
+      /ta SOFI SHORT
+    Uses computed technical indicators (RSI, MACD, SMA, Bollinger Bands)
+    and extended reasoning for deeper analysis.
+    """
+    if not args:
+        send_message(chat_id, (
+            "❌ Usage: /ta TICKER DIRECTION [QTY] [@PRICE]\n\n"
+            "Examples:\n"
+            "  /ta NVDA BUY 10 @145.50\n"
+            "  /ta ASTS LONG 50\n"
+            "  /ta SOFI SHORT\n\n"
+            "DIRECTION: BUY, LONG, SELL, or SHORT\n"
+            "<i>Includes RSI, MACD, SMA, Bollinger Bands + extended reasoning</i>"
+        ))
+        return
+
+    tokens = args.upper().split()
+    symbol = tokens[0].lstrip("$")
+    if not _valid_ticker(symbol):
+        send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>. Use 1–5 uppercase letters.")
+        return
+
+    direction = tokens[1] if len(tokens) > 1 else ""
+    if direction not in {"BUY", "LONG", "SELL", "SHORT"}:
+        send_message(chat_id, (
+            f"❌ Direction must be BUY, LONG, SELL, or SHORT.\n"
+            f"Example: /ta {symbol} BUY 10 @145.50"
+        ))
+        return
+
+    qty = None
+    entry_price = None
+    for tok in tokens[2:]:
+        clean = tok.lstrip("@$")
+        try:
+            val = float(clean)
+            if "@" in tok or tok.startswith("$"):
+                entry_price = val
+            elif qty is None:
+                qty = int(val)
+        except ValueError:
+            pass
+
+    send_message(chat_id, f"Running algorithmic analysis for {direction} {symbol}...")
+
+    quote   = get_stock_quote(symbol)
+    metrics = get_key_metrics(symbol)
+    hist    = get_historical_prices(symbol, days=90)
+
+    context = f"Today: {datetime.now().strftime('%B %d, %Y')}\n"
+    context += f"Trade setup: {direction} {symbol}"
+    if qty:
+        context += f", {qty} shares"
+    if entry_price:
+        context += f", target entry @ ${entry_price:.2f}"
+    context += "\n"
+
+    current_price = None
+    if quote and "_error" not in quote:
+        current_price = quote.get("price")
+        context += (
+            f"{symbol}: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%) | "
+            f"Volume: {quote.get('volume','N/A')} | Avg Vol: {quote.get('avgVolume','N/A')} | "
+            f"Beta: {quote.get('beta','N/A')} | "
+            f"52wk ${quote.get('yearLow','N/A')}–${quote.get('yearHigh','N/A')}\n"
+        )
+        if entry_price and current_price:
+            gap_pct = ((current_price - entry_price) / entry_price) * 100
+            label = "above" if gap_pct > 0 else "below"
+            context += f"Entry vs current: {abs(gap_pct):.2f}% {label} target entry\n"
+        if qty and current_price:
+            context += f"Position value at current price: ${qty * current_price:,.0f}\n"
+
+    if metrics:
+        context += (
+            f"P/E: {metrics.get('peRatio','N/A')} | "
+            f"P/S: {metrics.get('priceToSalesRatio','N/A')} | "
+            f"Debt/Equity: {metrics.get('debtToEquity','N/A')} | "
+            f"ROE: {metrics.get('roe','N/A')}\n"
+        )
+
+    # ── Algorithmic indicators from historical prices ──────────────────
+    if hist:
+        sorted_hist = sorted(hist, key=lambda x: x.get("date", ""))
+        closes  = [d["close"]  for d in sorted_hist if d.get("close")]
+        volumes = [d["volume"] for d in sorted_hist if d.get("volume")]
+
+        if len(closes) >= 15:
+            rsi = _calc_rsi(closes)
+            if rsi is not None:
+                signal = "overbought" if rsi > 70 else ("oversold" if rsi < 30 else "neutral")
+                context += f"RSI(14): {rsi} ({signal})\n"
+
+            sma20 = _calc_sma(closes, 20)
+            sma50 = _calc_sma(closes, 50)
+            if sma20:
+                vs20 = f"{'above' if current_price and current_price > sma20 else 'below'}" if current_price else "N/A"
+                context += f"SMA20: ${sma20} (price {vs20})"
+            if sma50:
+                vs50 = f"{'above' if current_price and current_price > sma50 else 'below'}" if current_price else "N/A"
+                context += f"  |  SMA50: ${sma50} (price {vs50})\n"
+            elif sma20:
+                context += "\n"
+
+            if sma20 and sma50:
+                cross = "bullish stack (20>50)" if sma20 > sma50 else "bearish stack (50>20)"
+                context += f"MA alignment: {cross}\n"
+
+            macd_line, signal_line, macd_hist = _calc_macd(closes)
+            if macd_line is not None:
+                trend = "bullish" if macd_hist and macd_hist > 0 else "bearish"
+                cross_note = ""
+                if signal_line is not None:
+                    cross_note = " (above signal)" if macd_line > signal_line else " (below signal)"
+                context += f"MACD: {macd_line}{cross_note} | Signal: {signal_line} | Histogram: {macd_hist} ({trend})\n"
+
+            bb_lower, bb_mid, bb_upper = _calc_bollinger(closes)
+            if bb_upper and current_price:
+                bb_pos = round((current_price - bb_lower) / (bb_upper - bb_lower) * 100, 1) if bb_upper != bb_lower else 50
+                context += f"Bollinger Bands: ${bb_lower} / ${bb_mid} / ${bb_upper} | Price at {bb_pos}% of band\n"
+
+        if volumes and closes:
+            avg_vol = sum(volumes[-20:]) / min(len(volumes), 20)
+            last_vol = volumes[-1]
+            vol_ratio = round(last_vol / avg_vol, 2) if avg_vol else None
+            if vol_ratio:
+                vol_label = "heavy" if vol_ratio > 1.5 else ("light" if vol_ratio < 0.7 else "normal")
+                context += f"Volume: {last_vol:,} vs 20d avg {avg_vol:,.0f} ({vol_ratio}x — {vol_label})\n"
+
+        if len(closes) >= 20:
+            period_high = max(closes[-20:])
+            period_low  = min(closes[-20:])
+            context += f"20d range: ${period_low:.2f}–${period_high:.2f}"
+            if current_price:
+                pct_from_high = round((period_high - current_price) / period_high * 100, 1)
+                pct_from_low  = round((current_price - period_low)  / period_low  * 100, 1)
+                context += f" | {pct_from_high}% from high, {pct_from_low}% from low"
+            context += "\n"
+
+    search = web_search(f"{symbol} stock trade setup news {datetime.now().strftime('%B %Y')}")
+    if search:
+        context += f"Web data:\n{search}"
+
+    direction_label = "LONG (BUY)" if direction in ("BUY", "LONG") else "SHORT (SELL)"
+    entry_line  = f"Target entry: ${entry_price:.2f}" if entry_price else "No specific entry — analyze at current price"
+    sizing_line = f"Quantity: {qty} shares" if qty else "No quantity specified"
+
+    prompt = (
+        f"Algorithmic trade analysis for {direction_label} {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+        f"{entry_line} | {sizing_line}\n\n"
+        f"You have computed technical indicators above. Use them precisely.\n"
+        f"Cover:\n"
+        f"1. VERDICT upfront: STRONG SETUP / NEUTRAL / AVOID\n"
+        f"2. Entry quality — RSI, Bollinger position, key levels\n"
+        f"3. MACD + MA alignment — bullish or bearish technical picture\n"
+        f"4. Trade thesis and setup type (breakout, pullback, reversal, momentum)\n"
+        f"5. Risk/reward — specific price targets: upside and stop loss\n"
+        f"6. Position sizing for $10K account using 1–2% risk rule\n"
+        f"7. Red flags or headwinds specific to this setup\n\n"
+        f"Be direct. Push back on bad entries. Keep response under 3800 characters."
+    )
+    skill_prompt = get_skill_prompt("/ta")
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt)
+
+    header = f"<b>{symbol} TRADE ANALYSIS — {direction}</b>\n<i>Algo indicators + Reasoning | FMP Live + Web</i>\n"
+    if entry_price:
+        header += f"<i>Entry: ${entry_price:.2f}</i>"
+    if qty:
+        header += f"  |  <i>{qty} shares</i>"
+    header = header.rstrip() + "\n"
+    send_message(chat_id, header + "\n" + response)
+
+
 # ─────────────────────────────────────
 # STARFIRE TELEGRAM TICKET PARSER
 # ─────────────────────────────────────
@@ -2080,6 +2438,7 @@ def process_command(chat_id, text):
         "/premarket":   lambda: handle_premarket(chat_id),
         "/sentiment":   lambda: handle_sentiment(chat_id),
         "/rotation":    lambda: handle_rotation(chat_id),
+        "/ta":          lambda: handle_ta(chat_id, rest),
     }
 
     handler = routes.get(command)
