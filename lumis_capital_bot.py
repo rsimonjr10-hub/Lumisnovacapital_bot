@@ -1053,6 +1053,29 @@ def _calc_bollinger(prices, period=20):
     return round(mid - 2 * std, 2), round(mid, 2), round(mid + 2 * std, 2)
 
 
+def _calc_historical_volatility(prices, trading_days=252):
+    """Annualized historical volatility from daily close-to-close log returns."""
+    if len(prices) < 10:
+        return None
+    import math
+    rets = [math.log(prices[i] / prices[i - 1]) for i in range(1, len(prices)) if prices[i - 1] > 0]
+    if len(rets) < 2:
+        return None
+    mean = sum(rets) / len(rets)
+    var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
+    daily_vol = var ** 0.5
+    return round(daily_vol * (trading_days ** 0.5) * 100, 2)   # annualized %
+
+
+def _calc_expected_move(price, annual_vol_pct, days):
+    """1-standard-deviation expected move over `days` given annualized vol %."""
+    if not price or annual_vol_pct is None:
+        return None
+    import math
+    move = price * (annual_vol_pct / 100) * math.sqrt(days / 365.0)
+    return round(move, 2)
+
+
 # ─────────────────────────────────────
 # COMMAND HANDLERS
 # ─────────────────────────────────────
@@ -1811,20 +1834,76 @@ def handle_options(chat_id, symbol):
         send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>.")
         return
     send_message(chat_id, f"Analyzing options activity for {symbol}...")
-    quote = get_stock_quote(symbol)
-    context = ""
+    quote   = get_stock_quote(symbol)
+    metrics = get_key_metrics(symbol)
+    hist    = get_historical_prices(symbol, days=90)
+
+    context = f"{symbol} — Today: {datetime.now().strftime('%B %d, %Y')}\n"
+    current_price = None
     if quote and "_error" not in quote:
-        context = f"{symbol}: ${quote.get('price','N/A')}"
+        current_price = quote.get("price")
+        context += (
+            f"Price: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%) | "
+            f"Beta: {quote.get('beta','N/A')} | "
+            f"Volume: {quote.get('volume','N/A')} | Avg Vol: {quote.get('avgVolume','N/A')} | "
+            f"52wk ${quote.get('yearLow','N/A')}–${quote.get('yearHigh','N/A')}\n"
+        )
+
+    # ── Computed volatility + expected moves (real math, not guessed) ───
+    hv = None
+    if hist:
+        sorted_hist = sorted(hist, key=lambda x: x.get("date", ""))
+        closes = [d["close"] for d in sorted_hist if d.get("close")]
+        if len(closes) >= 20:
+            hv30 = _calc_historical_volatility(closes[-30:]) if len(closes) >= 30 else None
+            hv = _calc_historical_volatility(closes)
+            if hv is not None:
+                context += f"Historical Volatility (annualized): {hv}%"
+                if hv30 is not None:
+                    context += f" | 30-day HV: {hv30}%"
+                context += "\n"
+            if current_price and hv is not None:
+                em_week  = _calc_expected_move(current_price, hv, 7)
+                em_month = _calc_expected_move(current_price, hv, 30)
+                if em_week:
+                    context += (f"Expected move (1σ): ±${em_week} weekly "
+                                f"(${current_price - em_week:.2f}–${current_price + em_week:.2f})\n")
+                if em_month:
+                    context += (f"Expected move (1σ): ±${em_month} monthly "
+                                f"(${current_price - em_month:.2f}–${current_price + em_month:.2f})\n")
+            rsi = _calc_rsi(closes)
+            if rsi is not None:
+                context += f"RSI(14): {rsi}\n"
+            bb_lower, bb_mid, bb_upper = _calc_bollinger(closes)
+            if bb_upper:
+                context += f"Bollinger Bands(20): ${bb_lower} / ${bb_mid} / ${bb_upper}\n"
+
+    if metrics:
+        context += f"Market Cap: {metrics.get('marketCap','N/A')} | P/E: {metrics.get('peRatio','N/A')}\n"
+
     search = web_search(f"{symbol} options flow unusual activity IV {datetime.now().strftime('%B %Y')}")
     if search:
-        context += f"\nOptions data:\n{search}"
-    prompt = (f"Options analysis for {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
-              f"Cover: implied volatility (current vs historical), key strikes, put/call ratio, "
-              f"unusual activity if any, best options strategies for bull/bear scenarios, "
-              f"expected move, Greeks overview. Real risk/reward.")
+        context += f"Options flow / web data:\n{search}"
+
+    prompt = (
+        f"Options analysis for {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+        f"Use the computed Historical Volatility and Expected Move numbers above as your data anchor — "
+        f"these are calculated from real price history, treat them as fact.\n\n"
+        f"Cover precisely:\n"
+        f"1. IV context: compare likely current IV to the computed HV — is premium rich or cheap?\n"
+        f"2. Expected move: reference the computed 1σ weekly and monthly ranges for strike selection\n"
+        f"3. Key strikes: suggest specific strikes around the expected-move boundaries (round to liquid strikes)\n"
+        f"4. Put/call positioning and what it implies\n"
+        f"5. BULL strategy: exact structure, strikes, expiry, max profit/loss, breakeven\n"
+        f"6. BEAR strategy: exact structure, strikes, expiry, max profit/loss, breakeven\n"
+        f"7. Neutral/premium-selling play if IV looks elevated vs HV\n"
+        f"8. Risk: assignment, IV crush near earnings, liquidity\n\n"
+        f"Every strike and target must tie back to the computed price and expected move. "
+        f"Keep response under 3800 characters."
+    )
     skill_prompt = get_skill_prompt("/options")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"<b>{symbol} OPTIONS ANALYSIS</b>\n\n" + response)
+    send_message(chat_id, f"<b>{symbol} OPTIONS ANALYSIS</b>\n<i>Source: FMP Live + Computed Vol</i>\n\n" + response)
 
 
 def handle_crypto(chat_id, symbol):
