@@ -955,8 +955,12 @@ def ask_claude(prompt, context="", skill_prompt=None, history=None, max_tokens=1
         return "⚠️ Lumis Nova is temporarily unavailable. Try again in a moment."
 
 
-def ask_claude_reasoning(prompt, context="", skill_prompt=None, thinking_budget=8000):
-    """ask_claude with extended thinking enabled — falls back to standard on any error."""
+def ask_claude_reasoning(prompt, context="", skill_prompt=None, thinking_budget=10000):
+    """Claude with extended thinking — deepest available reasoning mode.
+    Falls back to standard ask_claude on any API error.
+    thinking_budget controls how much the model reasons before responding.
+    Recommended: 10000 (default), 16000 (deep analysis), 6000 (light analysis).
+    """
     url = "https://api.anthropic.com/v1/messages"
     headers = {
         "x-api-key": ANTHROPIC_API_KEY,
@@ -975,7 +979,7 @@ def ask_claude_reasoning(prompt, context="", skill_prompt=None, thinking_budget=
     else:
         full_prompt = prompt
 
-    max_tokens = thinking_budget + 2000
+    max_tokens = thinking_budget + 2048
     payload = {
         "model": CLAUDE_MODEL,
         "max_tokens": max_tokens,
@@ -984,13 +988,19 @@ def ask_claude_reasoning(prompt, context="", skill_prompt=None, thinking_budget=
         "messages": [{"role": "user", "content": full_prompt}]
     }
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=120)
-        if response.status_code != 200:
+        response = requests.post(url, headers=headers, json=payload, timeout=180)
+        if response.status_code not in (200,):
             log.warning(f"Reasoning API {response.status_code} — falling back to standard")
             return ask_claude(prompt, context, skill_prompt=skill_prompt)
         data = response.json()
         texts = [b["text"] for b in data.get("content", []) if b.get("type") == "text"]
-        return "\n".join(texts) if texts else ask_claude(prompt, context, skill_prompt=skill_prompt)
+        if texts:
+            log.info(f"Reasoning complete — thinking_budget={thinking_budget}, response_blocks={len(texts)}")
+            return "\n".join(texts)
+        return ask_claude(prompt, context, skill_prompt=skill_prompt)
+    except requests.exceptions.Timeout:
+        log.error(f"Reasoning API timeout (budget={thinking_budget}) — falling back to standard")
+        return ask_claude(prompt, context, skill_prompt=skill_prompt)
     except Exception as e:
         log.error(f"Reasoning API error: {e} — falling back to standard")
         return ask_claude(prompt, context, skill_prompt=skill_prompt)
@@ -1138,7 +1148,7 @@ def handle_watchlist(chat_id):
 Today: {datetime.now().strftime('%B %d, %Y')}
 {price_context}"""
         skill_prompt = get_skill_prompt("/watchlist")
-        commentary = ask_claude(prompt, skill_prompt=skill_prompt)
+        commentary = ask_claude_reasoning(prompt, skill_prompt=skill_prompt, thinking_budget=6000)
         lines.append(f"\n<b>LUMIS NOVA READ</b>\n\n{commentary}")
 
     send_message(chat_id, "\n".join(lines))
@@ -1171,7 +1181,7 @@ def handle_yields(chat_id):
 Today: {datetime.now().strftime('%B %d, %Y')}
 {context}"""
         skill_prompt = get_skill_prompt("/yields")
-        commentary = ask_claude(prompt, skill_prompt=skill_prompt)
+        commentary = ask_claude_reasoning(prompt, skill_prompt=skill_prompt, thinking_budget=6000)
         lines.append(f"\n<b>YIELD CURVE ANALYSIS</b>\n\n{commentary}")
         send_message(chat_id, "\n".join(lines))
     else:
@@ -1208,7 +1218,7 @@ def handle_earnings(chat_id):
 Today: {datetime.now().strftime('%B %d, %Y')}
 {earnings_context}"""
         skill_prompt = get_skill_prompt("/earnings")
-        commentary = ask_claude(prompt, skill_prompt=skill_prompt)
+        commentary = ask_claude_reasoning(prompt, skill_prompt=skill_prompt, thinking_budget=6000)
         lines.append(f"\n<b>EARNINGS PREVIEW</b>\n\n{commentary}")
         send_message(chat_id, "\n".join(lines))
     else:
@@ -1234,7 +1244,7 @@ Top 5 stories. 2-3 sentences per story. Format for Telegram HTML.
 Today: {datetime.now().strftime('%B %d, %Y')}
 {context}"""
         skill_prompt = get_skill_prompt("/news")
-        response = ask_claude(prompt, skill_prompt=skill_prompt)
+        response = ask_claude_reasoning(prompt, skill_prompt=skill_prompt)
         header = f"<b>LUMIS CAPITAL NEWS</b>\n{datetime.now().strftime('%b %d | %I:%M %p ET')}\n\n"
         send_message(chat_id, header + response)
     else:
@@ -1258,7 +1268,7 @@ def handle_macro(chat_id):
 Cover: yield curve, Fed outlook, key events today, oil/geopolitical impact.
 Format for Telegram HTML. Keep it actionable. {context}"""
     skill_prompt = get_skill_prompt("/macro")
-    response = ask_claude(prompt, skill_prompt=skill_prompt)
+    response = ask_claude_reasoning(prompt, skill_prompt=skill_prompt)
     header = f"<b>MACRO BRIEF</b>\n{datetime.now().strftime('%b %d | %I:%M %p ET')}\n\n"
     send_message(chat_id, header + response)
 
@@ -1303,7 +1313,7 @@ def handle_full(chat_id, symbol):
               f"entry strategy, stop loss, position sizing for $10K account.\n"
               f"Keep the ENTIRE response under 3800 characters so it fits in a single message. Be dense, no filler.")
     skill_prompt = get_skill_prompt("/full")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt, max_tokens=1100)
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt, thinking_budget=16000)
     send_message(chat_id, f"<b>{symbol} ANALYSIS</b>\n<i>Source: FMP + Web</i>\n\n" + response)
 
 
@@ -1323,7 +1333,7 @@ def handle_opinion(chat_id, symbol):
         context = f"${symbol}: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%)"
     prompt = f"Quick honest opinion on ${symbol}. Buy/sell/hold and why. 4-5 sentences. One key risk. One key catalyst."
     skill_prompt = get_skill_prompt("/opinion")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt)
     send_message(chat_id, f"<b>{symbol} QUICK TAKE</b>\n\n" + response)
 
 
@@ -1366,7 +1376,7 @@ For each of the 3 picks:
 Today: {datetime.now().strftime('%B %d, %Y')}"""
 
     skill_prompt = get_skill_prompt("/scout")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt, thinking_budget=16000)
     send_message(chat_id, f"<b>WEEKLY SCOUT</b>\n{datetime.now().strftime('%b %d, %Y')}\n\n" + response)
 
 
@@ -1392,7 +1402,7 @@ compounding scenario ($10K over 5yr/10yr),
 how to build the position, stop loss.
 Think years not weeks."""
     skill_prompt = get_skill_prompt("/invest")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt, thinking_budget=16000)
     send_message(chat_id, f"<b>{symbol} INVESTING VIEW</b>\n\n" + response)
 
 
@@ -1427,7 +1437,7 @@ def handle_insider(chat_id, symbol):
               f"Cover: who is buying, who is selling, net sentiment over 90 days, "
               f"institutional ownership trend, bull and bear interpretation of the activity.")
     skill_prompt = get_skill_prompt("/insider")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt)
     send_message(chat_id, f"<b>{symbol} INSIDER ACTIVITY</b>\n<i>Source: FMP Live</i>\n\n" + response)
 
 
@@ -1456,7 +1466,7 @@ max loss at stop, correlation risk, Kelly criterion suggestion,
 leverage risk if any, liquidity/beta risk.
 Be honest. Push back if sizing seems aggressive."""
     skill_prompt = get_skill_prompt("/risk")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt)
     send_message(chat_id, f"<b>{symbol} RISK CHECK</b>\n\n" + response)
 
 
@@ -1466,7 +1476,7 @@ At 10%, 15%, 20%, 25% annual return — value at 5yr, 10yr, 20yr.
 Then show covered call income overlay: $300/month reinvested.
 Make it real and motivating."""
     skill_prompt = get_skill_prompt("/compounding")
-    response = ask_claude(prompt, skill_prompt=skill_prompt)
+    response = ask_claude_reasoning(prompt, skill_prompt=skill_prompt)
     send_message(chat_id, "<b>COMPOUNDING MATH</b>\n\n" + response)
 
 
@@ -1573,7 +1583,7 @@ def handle_sector(chat_id, sector):
 Today: {datetime.now().strftime('%B %d, %Y')}
 Cover: key drivers, top stocks, ETF performance, bull case, bear case, positioning."""
     skill_prompt = get_skill_prompt("/sector")
-    response = ask_claude(prompt, skill_prompt=skill_prompt)
+    response = ask_claude_reasoning(prompt, skill_prompt=skill_prompt)
     send_message(chat_id, f"<b>{sector.upper()} SECTOR ANALYSIS</b>\n\n" + response)
 
 
@@ -1600,7 +1610,7 @@ def handle_compare(chat_id, ticker1, ticker2):
               f"Cover: business model, valuation, growth rate, moat, "
               f"bull case and bear case for each, clear verdict on which to buy.")
     skill_prompt = get_skill_prompt("/compare")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt, thinking_budget=16000)
     send_message(chat_id, f"<b>{ticker1} vs {ticker2}</b>\n<i>Source: FMP Live</i>\n\n" + response)
 
 
@@ -1624,7 +1634,7 @@ def handle_dividend(chat_id, symbol):
               f"sustainability, bull case (dividend grows), bear case (cut risk), "
               f"income scenario for $10K invested.")
     skill_prompt = get_skill_prompt("/dividend")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt)
     send_message(chat_id, f"<b>{symbol} DIVIDEND ANALYSIS</b>\n<i>Source: FMP Live</i>\n\n" + response)
 
 
@@ -1639,7 +1649,7 @@ def handle_momentum(chat_id):
 Cover: price action, key levels, bull case (continuation), bear case (reversal), entry strategy.
 Today: {datetime.now().strftime('%B %d, %Y')}"""
     skill_prompt = get_skill_prompt("/momentum")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt)
     send_message(chat_id, f"<b>MOMENTUM PLAYS</b>\n{datetime.now().strftime('%b %d, %Y')}\n\n" + response)
 
 
@@ -1652,7 +1662,7 @@ def handle_portfolio(chat_id, allocation):
 Cover: composition, diversification, risk assessment, bull case, bear case, rebalancing suggestions.
 Today: {datetime.now().strftime('%B %d, %Y')}"""
     skill_prompt = get_skill_prompt("/portfolio")
-    response = ask_claude(prompt, skill_prompt=skill_prompt)
+    response = ask_claude_reasoning(prompt, skill_prompt=skill_prompt, thinking_budget=16000)
     send_message(chat_id, "<b>PORTFOLIO REVIEW</b>\n\n" + response)
 
 
@@ -1821,7 +1831,7 @@ def handle_technical(chat_id, symbol):
               f"chart pattern if any, volume analysis. Bull case (continuation), bear case (reversal). "
               f"Entry levels, stop loss, price targets.")
     skill_prompt = get_skill_prompt("/technical")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt)
     send_message(chat_id, f"<b>{symbol} TECHNICAL ANALYSIS</b>\n\n" + response)
 
 
@@ -1902,7 +1912,7 @@ def handle_options(chat_id, symbol):
         f"Keep response under 3800 characters."
     )
     skill_prompt = get_skill_prompt("/options")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt, thinking_budget=16000)
     send_message(chat_id, f"<b>{symbol} OPTIONS ANALYSIS</b>\n<i>Source: FMP Live + Computed Vol</i>\n\n" + response)
 
 
@@ -1925,7 +1935,7 @@ def handle_crypto(chat_id, symbol):
               f"macro crypto environment, bull case with target, bear case with stop, "
               f"entry range, position sizing. Also cover BTC dominance context.")
     skill_prompt = get_skill_prompt("/crypto")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt)
     send_message(chat_id, f"<b>{symbol} CRYPTO ANALYSIS</b>\n<i>Source: FMP + Web</i>\n\n" + response)
 
 
@@ -1951,7 +1961,7 @@ def handle_etf(chat_id, symbol):
               f"Cover: what it tracks, top holdings, expense ratio, recent fund flows, "
               f"performance vs benchmark, bull case, bear case, who should own it.")
     skill_prompt = get_skill_prompt("/etf")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt)
     send_message(chat_id, f"<b>{symbol} ETF ANALYSIS</b>\n<i>Source: FMP + Web</i>\n\n" + response)
 
 
@@ -1982,7 +1992,7 @@ def handle_squeeze(chat_id, symbol):
               f"squeeze trigger catalyst, bull case (squeeze target), bear case (short wins), "
               f"realistic probability, entry and stop.")
     skill_prompt = get_skill_prompt("/squeeze")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt)
     send_message(chat_id, f"<b>{symbol} SQUEEZE ANALYSIS</b>\n<i>Source: FMP + Web</i>\n\n" + response)
 
 
@@ -2000,7 +2010,7 @@ def handle_ipo(chat_id, symbol):
               f"underwriters, lock-up expiry risk, bull case (growth story), bear case (overvalued/unprofitable), "
               f"first-day pop potential, whether to buy at IPO vs wait 90 days.")
     skill_prompt = get_skill_prompt("/ipo")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt)
     send_message(chat_id, f"<b>{symbol.upper()} IPO ANALYSIS</b>\n\n" + response)
 
 
@@ -2022,7 +2032,7 @@ def handle_fx(chat_id, pair):
               f"macro drivers, correlation to equities/gold/commodities, "
               f"bull case (strengthens), bear case (weakens), impact on US multinationals.")
     skill_prompt = get_skill_prompt("/fx")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt)
     send_message(chat_id, f"<b>{pair} FX ANALYSIS</b>\n<i>Source: FMP + Web</i>\n\n" + response)
 
 
@@ -2042,7 +2052,7 @@ def handle_commodities(chat_id):
               f"copper as economic signal, natural gas, ags if notable. "
               f"Bull case and bear case for each. What the complex signals about the economy.")
     skill_prompt = get_skill_prompt("/commodities")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt)
     send_message(chat_id, f"<b>COMMODITIES</b>\n<i>Source: FMP Live</i>\n{datetime.now().strftime('%b %d, %Y')}\n\n" + response)
 
 
@@ -2069,7 +2079,7 @@ def handle_premarket(chat_id):
               f"major pre-market movers (up AND down) and why, key economic data releasing today, "
               f"what to watch at open, bull case for today's session, bear case for today's session.")
     skill_prompt = get_skill_prompt("/premarket")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt)
     send_message(chat_id, f"<b>PRE-MARKET BRIEF</b>\n{datetime.now().strftime('%b %d | %I:%M %p ET')}\n\n" + response)
 
 
@@ -2100,7 +2110,7 @@ def handle_sentiment(chat_id):
               f"Cover: overall risk-on/risk-off regime, VIX interpretation, sector breadth, "
               f"yield curve signal, fund flow direction, contrarian signals, positioning recommendation.")
     skill_prompt = get_skill_prompt("/sentiment")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt, thinking_budget=16000)
     send_message(chat_id, f"<b>MARKET SENTIMENT</b>\n<i>Source: FMP Live + Web</i>\n{datetime.now().strftime('%b %d, %Y')}\n\n" + response)
 
 
@@ -2125,7 +2135,7 @@ def handle_rotation(chat_id):
               f"Cover: current rotation regime, top/bottom 3 sectors with macro drivers, "
               f"growth vs value, best ETF plays, highest-conviction rotation trade.")
     skill_prompt = get_skill_prompt("/rotation")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt, thinking_budget=16000)
     send_message(chat_id, f"<b>SECTOR ROTATION</b>\n<i>Source: FMP Live + Web</i>\n{datetime.now().strftime('%b %d, %Y')}\n\n" + response)
 
 
@@ -2293,7 +2303,7 @@ def handle_ta(chat_id, args):
             f"7. Red flags or headwinds specific to this setup\n\n"
             f"Be direct. Push back on bad entries. Keep response under 3800 characters."
         )
-        response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt)
+        response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt, thinking_budget=16000)
         header = f"<b>{symbol} TRADE ANALYSIS — {direction}</b>\n<i>Algo indicators + Reasoning | FMP Live + Web</i>\n"
         if entry_price:
             header += f"<i>Entry: ${entry_price:.2f}</i>"
@@ -2316,7 +2326,7 @@ def handle_ta(chat_id, args):
             f"9. BEAR CASE: what breaks down and where the floor is\n\n"
             f"Every level must use the exact computed prices. Keep response under 3800 characters."
         )
-        response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt)
+        response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt, thinking_budget=16000)
         header = f"<b>{symbol} TECHNICAL ANALYSIS</b>\n<i>Algo indicators + Reasoning | FMP Live + Web</i>\n"
 
     send_message(chat_id, header + "\n" + response)
@@ -3070,10 +3080,11 @@ def _execute_starfire_task(description):
         return _starfire_watchlist()
 
     # Fallback — pass directly to Claude as a financial data request
-    return ask_claude(
+    return ask_claude_reasoning(
         description,
         f"STARFIRE data request. Today: {datetime.now().strftime('%B %d, %Y')}",
-        skill_prompt=get_skill_prompt("/full")
+        skill_prompt=get_skill_prompt("/full"),
+        thinking_budget=10000
     )
 
 
@@ -3090,43 +3101,43 @@ def _starfire_full(ticker):
     if consensus and "_error" not in consensus:
         context += f"Analyst PT: ${consensus.get('targetConsensus','N/A')}\n"
     prompt = f"Full stock analysis for {ticker}. Today: {datetime.now().strftime('%B %d, %Y')}"
-    return ask_claude(prompt, context, skill_prompt=get_skill_prompt("/full"))
+    return ask_claude_reasoning(prompt, context, skill_prompt=get_skill_prompt("/full"), thinking_budget=16000)
 
 def _starfire_opinion(ticker):
     quote = get_stock_quote(ticker)
     context = ""
     if quote and "_error" not in quote:
         context = f"{ticker}: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%)"
-    return ask_claude(f"Quick opinion on {ticker}. Buy/sell/hold and why.", context, skill_prompt=get_skill_prompt("/opinion"))
+    return ask_claude_reasoning(f"Quick opinion on {ticker}. Buy/sell/hold and why.", context, skill_prompt=get_skill_prompt("/opinion"))
 
 def _starfire_invest(ticker):
     quote = get_stock_quote(ticker)
     context = ""
     if quote and "_error" not in quote:
         context = f"{ticker}: ${quote.get('price','N/A')} | Cap: ${quote.get('marketCap',0)/1e9:.2f}B"
-    return ask_claude(f"Long-term investing analysis for {ticker}.", context, skill_prompt=get_skill_prompt("/invest"))
+    return ask_claude_reasoning(f"Long-term investing analysis for {ticker}.", context, skill_prompt=get_skill_prompt("/invest"), thinking_budget=16000)
 
 def _starfire_dividend(ticker):
     quote = get_stock_quote(ticker)
     context = ""
     if quote and "_error" not in quote:
         context = f"{ticker}: ${quote.get('price','N/A')}"
-    return ask_claude(f"Dividend analysis for {ticker}. Today: {datetime.now().strftime('%B %d, %Y')}", context, skill_prompt=get_skill_prompt("/dividend"))
+    return ask_claude_reasoning(f"Dividend analysis for {ticker}. Today: {datetime.now().strftime('%B %d, %Y')}", context, skill_prompt=get_skill_prompt("/dividend"))
 
 def _starfire_insider(ticker):
-    return ask_claude(f"Insider trading analysis for {ticker}. Today: {datetime.now().strftime('%B %d, %Y')}", skill_prompt=get_skill_prompt("/insider"))
+    return ask_claude_reasoning(f"Insider trading analysis for {ticker}. Today: {datetime.now().strftime('%B %d, %Y')}", skill_prompt=get_skill_prompt("/insider"))
 
 def _starfire_risk(ticker):
     quote = get_stock_quote(ticker)
     context = f"{ticker}: ${quote.get('price','N/A')}" if quote and "_error" not in quote else ""
-    return ask_claude(f"Risk check for {ticker}.", context, skill_prompt=get_skill_prompt("/risk"))
+    return ask_claude_reasoning(f"Risk check for {ticker}.", context, skill_prompt=get_skill_prompt("/risk"))
 
 def _starfire_yields():
     rates = get_treasury_rates()
     if not rates or "_error" in rates:
         return "Treasury data unavailable."
     context = f"2yr: {rates.get('year2','N/A')}% | 10yr: {rates.get('year10','N/A')}% | 30yr: {rates.get('year30','N/A')}%"
-    return ask_claude(f"Yield curve analysis. Today: {datetime.now().strftime('%B %d, %Y')} {context}", skill_prompt=get_skill_prompt("/yields"))
+    return ask_claude_reasoning(f"Yield curve analysis. Today: {datetime.now().strftime('%B %d, %Y')} {context}", skill_prompt=get_skill_prompt("/yields"))
 
 def _starfire_earnings_brief():
     earnings = get_earnings_calendar()
@@ -3135,28 +3146,28 @@ def _starfire_earnings_brief():
     major = ["AAPL","MSFT","NVDA","META","GOOGL","AMZN","TSLA","NOW","MU","HOOD","SOFI","IREN","ASTS","AMD","INTC"]
     filtered = [e for e in earnings if e.get("symbol") in major][:8]
     context = "\n".join(f"{e['symbol']} | {e.get('date','')} | EPS est: {e.get('epsEstimated','N/A')}" for e in filtered)
-    return ask_claude(f"Earnings preview. Today: {datetime.now().strftime('%B %d, %Y')}\n{context}", skill_prompt=get_skill_prompt("/earnings"))
+    return ask_claude_reasoning(f"Earnings preview. Today: {datetime.now().strftime('%B %d, %Y')}\n{context}", skill_prompt=get_skill_prompt("/earnings"))
 
 def _starfire_news_brief():
     news = get_stock_news()
     if not news or isinstance(news, dict):
         return "News data unavailable."
     context = "\n".join(f"[{n.get('symbol','')}] {n.get('title','')}" for n in news[:8])
-    return ask_claude(f"Market news brief. Today: {datetime.now().strftime('%B %d, %Y')}\n{context}", skill_prompt=get_skill_prompt("/news"))
+    return ask_claude_reasoning(f"Market news brief. Today: {datetime.now().strftime('%B %d, %Y')}\n{context}", skill_prompt=get_skill_prompt("/news"))
 
 def _starfire_macro_brief():
     rates = get_treasury_rates()
     context = ""
     if rates and "_error" not in rates:
         context = f"10yr: {rates.get('year10')}% | 2yr: {rates.get('year2')}% | 30yr: {rates.get('year30')}%"
-    return ask_claude(f"Macro brief. Today: {datetime.now().strftime('%B %d, %Y')}. {context}", skill_prompt=get_skill_prompt("/macro"))
+    return ask_claude_reasoning(f"Macro brief. Today: {datetime.now().strftime('%B %d, %Y')}. {context}", skill_prompt=get_skill_prompt("/macro"))
 
 def _starfire_scout():
     focus_sectors = random.sample(_SCOUT_SECTORS, 2)
     exclude = ", ".join(WATCHLIST)
     context = f"Scout run {datetime.now().strftime('%B %d, %Y')}"
     prompt = f"3 fresh stock picks. Do NOT pick: {exclude}. At least 2 from: {', '.join(focus_sectors)}. All different sectors."
-    return ask_claude(prompt, context, skill_prompt=get_skill_prompt("/scout"))
+    return ask_claude_reasoning(prompt, context, skill_prompt=get_skill_prompt("/scout"), thinking_budget=16000)
 
 def _starfire_watchlist():
     lines = []
