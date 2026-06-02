@@ -882,7 +882,7 @@ def get_extended_price(symbol):
 # ─────────────────────────────────────
 # CLAUDE AI
 # ─────────────────────────────────────
-def ask_claude(prompt, context="", skill_prompt=None, history=None, max_tokens=1500):
+def ask_claude(prompt, context="", skill_prompt=None, history=None, max_tokens=1100):
     url = "https://api.anthropic.com/v1/messages"
     headers = {
         "x-api-key": ANTHROPIC_API_KEY,
@@ -1160,9 +1160,10 @@ def handle_full(chat_id, symbol):
     prompt = (f"Full institutional-quality analysis for ${symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
               f"Cover: business model, moat, top 3 competitors, key catalysts, "
               f"valuation vs peers, bull case with price target, bear case with downside, "
-              f"entry strategy, stop loss, position sizing for $10K account.")
+              f"entry strategy, stop loss, position sizing for $10K account.\n"
+              f"Keep the ENTIRE response under 3800 characters so it fits in a single message. Be dense, no filler.")
     skill_prompt = get_skill_prompt("/full")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt, max_tokens=2000)
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt, max_tokens=1100)
     send_message(chat_id, f"<b>{symbol} ANALYSIS</b>\n<i>Source: FMP Live</i>\n\n" + response)
 
 
