@@ -1370,6 +1370,7 @@ def handle_help(chat_id):
 /options [TICKER] — Options flow, IV, best strategies
 /insider [TICKER] — Insider buying/selling activity
 /risk [TICKER] — Position risk check + sizing
+/trade [TICKER] [BUY/SELL] [QTY] [@PRICE] — Analyze a specific trade setup
 /squeeze [TICKER] — Short squeeze potential
 /ipo [TICKER] — IPO analysis
 
@@ -1418,6 +1419,7 @@ def handle_pals(chat_id):
         "/options [TICKER] — Options flow, IV, strategies\n"
         "/insider [TICKER] — Insider buying/selling activity\n"
         "/risk [TICKER] — Position risk + sizing for $10K\n"
+        "/trade [TICKER] [BUY/SELL] [QTY] [@PRICE] — Analyze a trade setup\n"
         "/invest [TICKER] — Long-term thesis + DCA plan\n"
         "/opinion [TICKER] — Quick honest take\n"
         "/squeeze [TICKER] — Short squeeze potential\n"
@@ -1950,6 +1952,129 @@ def handle_rotation(chat_id):
     send_message(chat_id, f"<b>SECTOR ROTATION</b>\n<i>Source: FMP Live + Web</i>\n{datetime.now().strftime('%b %d, %Y')}\n\n" + response)
 
 
+def handle_trade(chat_id, args):
+    """
+    /trade TICKER DIRECTION [QTY] [@PRICE]
+    Examples:
+      /trade NVDA BUY 10 @145.50
+      /trade ASTS LONG 50
+      /trade SOFI SHORT
+    """
+    if not args:
+        send_message(chat_id, (
+            "❌ Usage: /trade TICKER DIRECTION [QTY] [@PRICE]\n\n"
+            "Examples:\n"
+            "  /trade NVDA BUY 10 @145.50\n"
+            "  /trade ASTS LONG 50\n"
+            "  /trade SOFI SHORT\n\n"
+            "DIRECTION: BUY, LONG, SELL, or SHORT"
+        ))
+        return
+
+    tokens = args.upper().split()
+    symbol = tokens[0].lstrip("$")
+    if not _valid_ticker(symbol):
+        send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>. Use 1–5 uppercase letters.")
+        return
+
+    direction = tokens[1] if len(tokens) > 1 else ""
+    if direction not in {"BUY", "LONG", "SELL", "SHORT"}:
+        send_message(chat_id, (
+            f"❌ Direction must be BUY, LONG, SELL, or SHORT.\n"
+            f"Example: /trade {symbol} BUY 10 @145.50"
+        ))
+        return
+
+    qty = None
+    entry_price = None
+    for tok in tokens[2:]:
+        clean = tok.lstrip("@$")
+        try:
+            val = float(clean)
+            if "@" in tok or tok.startswith("$"):
+                entry_price = val
+            elif qty is None:
+                qty = int(val)
+        except ValueError:
+            pass
+
+    send_message(chat_id, f"Analyzing {direction} trade for {symbol}...")
+
+    quote   = get_stock_quote(symbol)
+    metrics = get_key_metrics(symbol)
+    hist    = get_historical_prices(symbol, days=30)
+
+    context = f"Today: {datetime.now().strftime('%B %d, %Y')}\n"
+    context += f"Trade setup: {direction} {symbol}"
+    if qty:
+        context += f", {qty} shares"
+    if entry_price:
+        context += f", target entry @ ${entry_price:.2f}"
+    context += "\n"
+
+    current_price = None
+    if quote and "_error" not in quote:
+        current_price = quote.get("price")
+        context += (
+            f"{symbol}: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%) | "
+            f"Volume: {quote.get('volume','N/A')} | Avg Vol: {quote.get('avgVolume','N/A')} | "
+            f"Beta: {quote.get('beta','N/A')} | "
+            f"52wk ${quote.get('yearLow','N/A')}–${quote.get('yearHigh','N/A')}\n"
+        )
+        if entry_price and current_price:
+            gap_pct = ((current_price - entry_price) / entry_price) * 100
+            label = "above" if gap_pct > 0 else "below"
+            context += f"Entry vs current: {abs(gap_pct):.2f}% {label} your target entry\n"
+        if qty and current_price:
+            context += f"Position value at current price: ${qty * current_price:,.0f}\n"
+
+    if metrics:
+        context += (
+            f"P/E: {metrics.get('peRatio','N/A')} | "
+            f"P/S: {metrics.get('priceToSalesRatio','N/A')} | "
+            f"Debt/Equity: {metrics.get('debtToEquity','N/A')} | "
+            f"ROE: {metrics.get('roe','N/A')}\n"
+        )
+
+    if hist and len(hist) >= 5:
+        closes = [d.get("close") for d in hist if d.get("close")]
+        if len(closes) >= 5:
+            context += f"Last 5 closes: {', '.join(f'${p:.2f}' for p in closes[-5:])}\n"
+            context += f"30-day range: ${min(closes):.2f}–${max(closes):.2f}\n"
+
+    search = web_search(f"{symbol} stock trade setup news {datetime.now().strftime('%B %Y')}")
+    if search:
+        context += f"Web data:\n{search}"
+
+    direction_label = "LONG (BUY)" if direction in ("BUY", "LONG") else "SHORT (SELL)"
+    entry_line = f"Target entry: ${entry_price:.2f}" if entry_price else "No specific entry price — analyze at current price"
+    sizing_line = f"Quantity: {qty} shares" if qty else "No quantity specified"
+
+    prompt = (
+        f"Trade analysis for {direction_label} {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+        f"{entry_line}\n{sizing_line}\n\n"
+        f"Analyze this trade setup covering:\n"
+        f"1. Entry quality vs current price and technical levels\n"
+        f"2. Trade thesis and setup type\n"
+        f"3. Risk/reward: upside target and stop loss with specific price levels\n"
+        f"4. Position sizing for a $10K account\n"
+        f"5. Red flags or risks specific to this setup right now\n"
+        f"6. VERDICT: STRONG SETUP / NEUTRAL / AVOID\n\n"
+        f"Be direct. If the trade looks bad, say so. "
+        f"Keep the entire response under 3800 characters."
+    )
+    skill_prompt = get_skill_prompt("/trade")
+    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+
+    header = f"<b>{symbol} TRADE ANALYSIS — {direction}</b>\n<i>Source: FMP Live + Web</i>\n"
+    if entry_price:
+        header += f"<i>Entry: ${entry_price:.2f}</i>"
+    if qty:
+        header += f"  |  <i>{qty} shares</i>"
+    header = header.rstrip() + "\n"
+    send_message(chat_id, header + "\n" + response)
+
+
 # ─────────────────────────────────────
 # STARFIRE TELEGRAM TICKET PARSER
 # ─────────────────────────────────────
@@ -2080,6 +2205,7 @@ def process_command(chat_id, text):
         "/premarket":   lambda: handle_premarket(chat_id),
         "/sentiment":   lambda: handle_sentiment(chat_id),
         "/rotation":    lambda: handle_rotation(chat_id),
+        "/trade":       lambda: handle_trade(chat_id, rest),
     }
 
     handler = routes.get(command)
