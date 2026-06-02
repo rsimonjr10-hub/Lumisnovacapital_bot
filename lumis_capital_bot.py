@@ -1170,11 +1170,8 @@ def handle_full(chat_id, symbol):
               f"entry strategy, stop loss, position sizing for $10K account.\n"
               f"Keep the ENTIRE response under 3800 characters so it fits in a single message. Be dense, no filler.")
     skill_prompt = get_skill_prompt("/full")
-    log.info(f"handle_full executing for {symbol} on instance {_INSTANCE_ID}")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt, max_tokens=1100)
-    send_message(chat_id,
-                 f"<b>{symbol} ANALYSIS</b>\n<i>Source: FMP Live</i>\n\n" + response +
-                 f"\n\n<i>· {_INSTANCE_ID}</i>")
+    send_message(chat_id, f"<b>{symbol} ANALYSIS</b>\n<i>Source: FMP Live</i>\n\n" + response)
 
 
 def handle_opinion(chat_id, symbol):
