@@ -955,6 +955,104 @@ def ask_claude(prompt, context="", skill_prompt=None, history=None, max_tokens=1
         return "⚠️ Lumis Nova is temporarily unavailable. Try again in a moment."
 
 
+def ask_claude_reasoning(prompt, context="", skill_prompt=None, thinking_budget=8000):
+    """ask_claude with extended thinking enabled — falls back to standard on any error."""
+    url = "https://api.anthropic.com/v1/messages"
+    headers = {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "interleaved-thinking-2025-05-14",
+        "content-type": "application/json"
+    }
+    system = skill_prompt if skill_prompt else SYSTEM_PROMPT
+    if context:
+        wrapped = (
+            f"━━ LIVE MARKET DATA — {datetime.now().strftime('%b %d, %Y %I:%M %p ET')} ━━\n"
+            f"{context}\n"
+            f"━━ USE THE ABOVE NUMBERS EXACTLY — DO NOT SUBSTITUTE TRAINING DATA PRICES ━━"
+        )
+        full_prompt = f"{wrapped}\n\n{prompt}"
+    else:
+        full_prompt = prompt
+
+    max_tokens = thinking_budget + 2000
+    payload = {
+        "model": CLAUDE_MODEL,
+        "max_tokens": max_tokens,
+        "thinking": {"type": "enabled", "budget_tokens": thinking_budget},
+        "system": system,
+        "messages": [{"role": "user", "content": full_prompt}]
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=120)
+        if response.status_code != 200:
+            log.warning(f"Reasoning API {response.status_code} — falling back to standard")
+            return ask_claude(prompt, context, skill_prompt=skill_prompt)
+        data = response.json()
+        texts = [b["text"] for b in data.get("content", []) if b.get("type") == "text"]
+        return "\n".join(texts) if texts else ask_claude(prompt, context, skill_prompt=skill_prompt)
+    except Exception as e:
+        log.error(f"Reasoning API error: {e} — falling back to standard")
+        return ask_claude(prompt, context, skill_prompt=skill_prompt)
+
+
+# ─────────────────────────────────────
+# ALGORITHMIC INDICATOR HELPERS
+# ─────────────────────────────────────
+def _calc_rsi(prices, period=14):
+    if len(prices) < period + 1:
+        return None
+    gains, losses = [], []
+    for i in range(1, len(prices)):
+        d = prices[i] - prices[i - 1]
+        gains.append(max(d, 0))
+        losses.append(max(-d, 0))
+    avg_g = sum(gains[:period]) / period
+    avg_l = sum(losses[:period]) / period
+    for i in range(period, len(gains)):
+        avg_g = (avg_g * (period - 1) + gains[i]) / period
+        avg_l = (avg_l * (period - 1) + losses[i]) / period
+    if avg_l == 0:
+        return 100.0
+    return round(100 - (100 / (1 + avg_g / avg_l)), 2)
+
+
+def _calc_ema(prices, period):
+    if len(prices) < period:
+        return None
+    k = 2.0 / (period + 1)
+    ema = sum(prices[:period]) / period
+    for p in prices[period:]:
+        ema = p * k + ema * (1 - k)
+    return round(ema, 4)
+
+
+def _calc_macd(prices):
+    if len(prices) < 35:
+        return None, None, None
+    macd_vals = []
+    for i in range(26, len(prices) + 1):
+        e12 = _calc_ema(prices[:i], 12)
+        e26 = _calc_ema(prices[:i], 26)
+        if e12 is not None and e26 is not None:
+            macd_vals.append(e12 - e26)
+    if not macd_vals:
+        return None, None, None
+    line = macd_vals[-1]
+    signal = _calc_ema(macd_vals, 9) if len(macd_vals) >= 9 else None
+    hist = round(line - signal, 4) if signal is not None else None
+    return round(line, 4), (round(signal, 4) if signal is not None else None), hist
+
+
+def _calc_bollinger(prices, period=20):
+    if len(prices) < period:
+        return None, None, None
+    recent = prices[-period:]
+    mid = sum(recent) / period
+    std = (sum((p - mid) ** 2 for p in recent) / period) ** 0.5
+    return round(mid - 2 * std, 2), round(mid, 2), round(mid + 2 * std, 2)
+
+
 # ─────────────────────────────────────
 # COMMAND HANDLERS
 # ─────────────────────────────────────
@@ -1370,7 +1468,7 @@ def handle_help(chat_id):
 /options [TICKER] — Options flow, IV, best strategies
 /insider [TICKER] — Insider buying/selling activity
 /risk [TICKER] — Position risk check + sizing
-/trade [TICKER] [BUY/SELL] [QTY] [@PRICE] — Analyze a specific trade setup
+/ta [TICKER] [BUY/SELL] [QTY] [@PRICE] — Algorithmic trade analysis (RSI, MACD, SMA, BB + reasoning)
 /squeeze [TICKER] — Short squeeze potential
 /ipo [TICKER] — IPO analysis
 
@@ -1419,7 +1517,7 @@ def handle_pals(chat_id):
         "/options [TICKER] — Options flow, IV, strategies\n"
         "/insider [TICKER] — Insider buying/selling activity\n"
         "/risk [TICKER] — Position risk + sizing for $10K\n"
-        "/trade [TICKER] [BUY/SELL] [QTY] [@PRICE] — Analyze a trade setup\n"
+        "/ta [TICKER] [BUY/SELL] [QTY] [@PRICE] — Algorithmic trade analysis\n"
         "/invest [TICKER] — Long-term thesis + DCA plan\n"
         "/opinion [TICKER] — Quick honest take\n"
         "/squeeze [TICKER] — Short squeeze potential\n"
@@ -1952,22 +2050,25 @@ def handle_rotation(chat_id):
     send_message(chat_id, f"<b>SECTOR ROTATION</b>\n<i>Source: FMP Live + Web</i>\n{datetime.now().strftime('%b %d, %Y')}\n\n" + response)
 
 
-def handle_trade(chat_id, args):
+def handle_ta(chat_id, args):
     """
-    /trade TICKER DIRECTION [QTY] [@PRICE]
+    /ta TICKER DIRECTION [QTY] [@PRICE]
     Examples:
-      /trade NVDA BUY 10 @145.50
-      /trade ASTS LONG 50
-      /trade SOFI SHORT
+      /ta NVDA BUY 10 @145.50
+      /ta ASTS LONG 50
+      /ta SOFI SHORT
+    Uses computed technical indicators (RSI, MACD, SMA, Bollinger Bands)
+    and extended reasoning for deeper analysis.
     """
     if not args:
         send_message(chat_id, (
-            "❌ Usage: /trade TICKER DIRECTION [QTY] [@PRICE]\n\n"
+            "❌ Usage: /ta TICKER DIRECTION [QTY] [@PRICE]\n\n"
             "Examples:\n"
-            "  /trade NVDA BUY 10 @145.50\n"
-            "  /trade ASTS LONG 50\n"
-            "  /trade SOFI SHORT\n\n"
-            "DIRECTION: BUY, LONG, SELL, or SHORT"
+            "  /ta NVDA BUY 10 @145.50\n"
+            "  /ta ASTS LONG 50\n"
+            "  /ta SOFI SHORT\n\n"
+            "DIRECTION: BUY, LONG, SELL, or SHORT\n"
+            "<i>Includes RSI, MACD, SMA, Bollinger Bands + extended reasoning</i>"
         ))
         return
 
@@ -1981,7 +2082,7 @@ def handle_trade(chat_id, args):
     if direction not in {"BUY", "LONG", "SELL", "SHORT"}:
         send_message(chat_id, (
             f"❌ Direction must be BUY, LONG, SELL, or SHORT.\n"
-            f"Example: /trade {symbol} BUY 10 @145.50"
+            f"Example: /ta {symbol} BUY 10 @145.50"
         ))
         return
 
@@ -1998,11 +2099,11 @@ def handle_trade(chat_id, args):
         except ValueError:
             pass
 
-    send_message(chat_id, f"Analyzing {direction} trade for {symbol}...")
+    send_message(chat_id, f"Running algorithmic analysis for {direction} {symbol}...")
 
     quote   = get_stock_quote(symbol)
     metrics = get_key_metrics(symbol)
-    hist    = get_historical_prices(symbol, days=30)
+    hist    = get_historical_prices(symbol, days=90)
 
     context = f"Today: {datetime.now().strftime('%B %d, %Y')}\n"
     context += f"Trade setup: {direction} {symbol}"
@@ -2024,7 +2125,7 @@ def handle_trade(chat_id, args):
         if entry_price and current_price:
             gap_pct = ((current_price - entry_price) / entry_price) * 100
             label = "above" if gap_pct > 0 else "below"
-            context += f"Entry vs current: {abs(gap_pct):.2f}% {label} your target entry\n"
+            context += f"Entry vs current: {abs(gap_pct):.2f}% {label} target entry\n"
         if qty and current_price:
             context += f"Position value at current price: ${qty * current_price:,.0f}\n"
 
@@ -2036,37 +2137,90 @@ def handle_trade(chat_id, args):
             f"ROE: {metrics.get('roe','N/A')}\n"
         )
 
-    if hist and len(hist) >= 5:
-        closes = [d.get("close") for d in hist if d.get("close")]
-        if len(closes) >= 5:
-            context += f"Last 5 closes: {', '.join(f'${p:.2f}' for p in closes[-5:])}\n"
-            context += f"30-day range: ${min(closes):.2f}–${max(closes):.2f}\n"
+    # ── Algorithmic indicators from historical prices ──────────────────
+    if hist:
+        sorted_hist = sorted(hist, key=lambda x: x.get("date", ""))
+        closes  = [d["close"]  for d in sorted_hist if d.get("close")]
+        volumes = [d["volume"] for d in sorted_hist if d.get("volume")]
+
+        if len(closes) >= 15:
+            rsi = _calc_rsi(closes)
+            if rsi is not None:
+                signal = "overbought" if rsi > 70 else ("oversold" if rsi < 30 else "neutral")
+                context += f"RSI(14): {rsi} ({signal})\n"
+
+            sma20 = _calc_sma(closes, 20)
+            sma50 = _calc_sma(closes, 50)
+            if sma20:
+                vs20 = f"{'above' if current_price and current_price > sma20 else 'below'}" if current_price else "N/A"
+                context += f"SMA20: ${sma20} (price {vs20})"
+            if sma50:
+                vs50 = f"{'above' if current_price and current_price > sma50 else 'below'}" if current_price else "N/A"
+                context += f"  |  SMA50: ${sma50} (price {vs50})\n"
+            elif sma20:
+                context += "\n"
+
+            if sma20 and sma50:
+                cross = "bullish stack (20>50)" if sma20 > sma50 else "bearish stack (50>20)"
+                context += f"MA alignment: {cross}\n"
+
+            macd_line, signal_line, macd_hist = _calc_macd(closes)
+            if macd_line is not None:
+                trend = "bullish" if macd_hist and macd_hist > 0 else "bearish"
+                cross_note = ""
+                if signal_line is not None:
+                    cross_note = " (above signal)" if macd_line > signal_line else " (below signal)"
+                context += f"MACD: {macd_line}{cross_note} | Signal: {signal_line} | Histogram: {macd_hist} ({trend})\n"
+
+            bb_lower, bb_mid, bb_upper = _calc_bollinger(closes)
+            if bb_upper and current_price:
+                bb_pos = round((current_price - bb_lower) / (bb_upper - bb_lower) * 100, 1) if bb_upper != bb_lower else 50
+                context += f"Bollinger Bands: ${bb_lower} / ${bb_mid} / ${bb_upper} | Price at {bb_pos}% of band\n"
+
+        if volumes and closes:
+            avg_vol = sum(volumes[-20:]) / min(len(volumes), 20)
+            last_vol = volumes[-1]
+            vol_ratio = round(last_vol / avg_vol, 2) if avg_vol else None
+            if vol_ratio:
+                vol_label = "heavy" if vol_ratio > 1.5 else ("light" if vol_ratio < 0.7 else "normal")
+                context += f"Volume: {last_vol:,} vs 20d avg {avg_vol:,.0f} ({vol_ratio}x — {vol_label})\n"
+
+        if len(closes) >= 20:
+            period_high = max(closes[-20:])
+            period_low  = min(closes[-20:])
+            context += f"20d range: ${period_low:.2f}–${period_high:.2f}"
+            if current_price:
+                pct_from_high = round((period_high - current_price) / period_high * 100, 1)
+                pct_from_low  = round((current_price - period_low)  / period_low  * 100, 1)
+                context += f" | {pct_from_high}% from high, {pct_from_low}% from low"
+            context += "\n"
 
     search = web_search(f"{symbol} stock trade setup news {datetime.now().strftime('%B %Y')}")
     if search:
         context += f"Web data:\n{search}"
 
     direction_label = "LONG (BUY)" if direction in ("BUY", "LONG") else "SHORT (SELL)"
-    entry_line = f"Target entry: ${entry_price:.2f}" if entry_price else "No specific entry price — analyze at current price"
+    entry_line  = f"Target entry: ${entry_price:.2f}" if entry_price else "No specific entry — analyze at current price"
     sizing_line = f"Quantity: {qty} shares" if qty else "No quantity specified"
 
     prompt = (
-        f"Trade analysis for {direction_label} {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
-        f"{entry_line}\n{sizing_line}\n\n"
-        f"Analyze this trade setup covering:\n"
-        f"1. Entry quality vs current price and technical levels\n"
-        f"2. Trade thesis and setup type\n"
-        f"3. Risk/reward: upside target and stop loss with specific price levels\n"
-        f"4. Position sizing for a $10K account\n"
-        f"5. Red flags or risks specific to this setup right now\n"
-        f"6. VERDICT: STRONG SETUP / NEUTRAL / AVOID\n\n"
-        f"Be direct. If the trade looks bad, say so. "
-        f"Keep the entire response under 3800 characters."
+        f"Algorithmic trade analysis for {direction_label} {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+        f"{entry_line} | {sizing_line}\n\n"
+        f"You have computed technical indicators above. Use them precisely.\n"
+        f"Cover:\n"
+        f"1. VERDICT upfront: STRONG SETUP / NEUTRAL / AVOID\n"
+        f"2. Entry quality — RSI, Bollinger position, key levels\n"
+        f"3. MACD + MA alignment — bullish or bearish technical picture\n"
+        f"4. Trade thesis and setup type (breakout, pullback, reversal, momentum)\n"
+        f"5. Risk/reward — specific price targets: upside and stop loss\n"
+        f"6. Position sizing for $10K account using 1–2% risk rule\n"
+        f"7. Red flags or headwinds specific to this setup\n\n"
+        f"Be direct. Push back on bad entries. Keep response under 3800 characters."
     )
-    skill_prompt = get_skill_prompt("/trade")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt)
+    skill_prompt = get_skill_prompt("/ta")
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt)
 
-    header = f"<b>{symbol} TRADE ANALYSIS — {direction}</b>\n<i>Source: FMP Live + Web</i>\n"
+    header = f"<b>{symbol} TRADE ANALYSIS — {direction}</b>\n<i>Algo indicators + Reasoning | FMP Live + Web</i>\n"
     if entry_price:
         header += f"<i>Entry: ${entry_price:.2f}</i>"
     if qty:
@@ -2205,7 +2359,7 @@ def process_command(chat_id, text):
         "/premarket":   lambda: handle_premarket(chat_id),
         "/sentiment":   lambda: handle_sentiment(chat_id),
         "/rotation":    lambda: handle_rotation(chat_id),
-        "/trade":       lambda: handle_trade(chat_id, rest),
+        "/ta":          lambda: handle_ta(chat_id, rest),
     }
 
     handler = routes.get(command)
