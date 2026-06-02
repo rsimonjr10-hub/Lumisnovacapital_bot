@@ -1093,10 +1093,6 @@ def handle_news(chat_id):
         context = "Latest market news:\n"
         for item in news[:8]:
             context += f"- [{item.get('symbol','')}] {item.get('title','')}\n"
-        # Enrich with web search headlines
-        search = web_search(f"stock market news today {datetime.now().strftime('%B %d %Y')}")
-        if search:
-            context += f"\nWeb headlines:\n{search}"
         prompt = f"""Give a morning market intelligence brief.
 Top 5 stories. 2-3 sentences per story. Format for Telegram HTML.
 Today: {datetime.now().strftime('%B %d, %Y')}
@@ -1118,10 +1114,6 @@ def handle_macro(chat_id):
         log.warning(f"Macro handler: FMP treasury error — {rates['_error']}")
     elif rates:
         context = f"10yr: {rates.get('year10')}% | 2yr: {rates.get('year2')}% | 30yr: {rates.get('year30')}%"
-    # Enrich with Fed/macro news
-    search = web_search(f"Federal Reserve macro economic news {datetime.now().strftime('%B %Y')}")
-    if search:
-        context += f"\nMacro web data:\n{search}"
     prompt = f"""Macro brief for {datetime.now().strftime('%B %d, %Y')}.
 Cover: yield curve, Fed outlook, key events today, oil/geopolitical impact.
 Format for Telegram HTML. Keep it actionable. {context}"""
@@ -1161,17 +1153,13 @@ def handle_full(chat_id, symbol):
     if news:
         context += "\nRecent news:\n" + "\n".join(f"- {n.get('title','')}" for n in news)
 
-    search = web_search(f"{symbol} stock analysis outlook {datetime.now().strftime('%B %Y')}")
-    if search:
-        context += f"\nWeb data:\n{search}"
-
     prompt = (f"Full institutional-quality analysis for ${symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
               f"Cover: business model, moat, top 3 competitors, key catalysts, "
               f"valuation vs peers, bull case with price target, bear case with downside, "
               f"entry strategy, stop loss, position sizing for $10K account.")
     skill_prompt = get_skill_prompt("/full")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt, max_tokens=2000)
-    send_message(chat_id, f"<b>{symbol} ANALYSIS</b>\n<i>Source: FMP + Web</i>\n\n" + response)
+    send_message(chat_id, f"<b>{symbol} ANALYSIS</b>\n<i>Source: FMP Live</i>\n\n" + response)
 
 
 def handle_opinion(chat_id, symbol):
@@ -1678,9 +1666,6 @@ def handle_technical(chat_id, symbol):
                         f"20-day MA: ${ma20:.2f}" +
                         (f" | 50-day MA: ${ma50:.2f}" if ma50 else "") +
                         f"\nLast 5 sessions: High ${high5:.2f} / Low ${low5:.2f}")
-    search = web_search(f"{symbol} technical analysis chart RSI MACD {datetime.now().strftime('%B %Y')}")
-    if search:
-        context += f"\nRecent technical data:\n{search}"
     prompt = (f"Technical analysis for {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
               f"Cover: trend direction, key support/resistance, RSI, MACD, moving averages, "
               f"chart pattern if any, volume analysis. Bull case (continuation), bear case (reversal). "
@@ -1703,9 +1688,6 @@ def handle_options(chat_id, symbol):
     context = ""
     if quote and "_error" not in quote:
         context = f"{symbol}: ${quote.get('price','N/A')}"
-    search = web_search(f"{symbol} options flow unusual activity IV {datetime.now().strftime('%B %Y')}")
-    if search:
-        context += f"\nOptions data:\n{search}"
     prompt = (f"Options analysis for {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
               f"Cover: implied volatility (current vs historical), key strikes, put/call ratio, "
               f"unusual activity if any, best options strategies for bull/bear scenarios, "
@@ -1726,16 +1708,13 @@ def handle_crypto(chat_id, symbol):
         context += (f"Price: ${fmp_quote.get('price','N/A')} | "
                     f"Change: {fmp_quote.get('changesPercentage',0):+.2f}% | "
                     f"Market Cap: ${(fmp_quote.get('marketCap',0) or 0)/1e9:.1f}B\n")
-    search = web_search(f"{symbol} crypto analysis price target {datetime.now().strftime('%B %d %Y')}")
-    if search:
-        context += f"Web data:\n{search}"
     prompt = (f"Crypto analysis for {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
               f"Cover: price action, key support/resistance, on-chain signals if relevant, "
               f"macro crypto environment, bull case with target, bear case with stop, "
               f"entry range, position sizing. Also cover BTC dominance context.")
     skill_prompt = get_skill_prompt("/crypto")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"<b>{symbol} CRYPTO ANALYSIS</b>\n<i>Source: FMP + Web</i>\n\n" + response)
+    send_message(chat_id, f"<b>{symbol} CRYPTO ANALYSIS</b>\n<i>Source: FMP Live</i>\n\n" + response)
 
 
 def handle_etf(chat_id, symbol):
@@ -1753,15 +1732,12 @@ def handle_etf(chat_id, symbol):
         context += "Top holdings:\n"
         for h in holdings[:8]:
             context += f"  {h.get('asset','')}: {h.get('weightPercentage','N/A')}%\n"
-    search = web_search(f"{symbol} ETF fund flows performance {datetime.now().strftime('%B %Y')}")
-    if search:
-        context += f"Web data:\n{search}"
     prompt = (f"ETF analysis for {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
               f"Cover: what it tracks, top holdings, expense ratio, recent fund flows, "
               f"performance vs benchmark, bull case, bear case, who should own it.")
     skill_prompt = get_skill_prompt("/etf")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"<b>{symbol} ETF ANALYSIS</b>\n<i>Source: FMP + Web</i>\n\n" + response)
+    send_message(chat_id, f"<b>{symbol} ETF ANALYSIS</b>\n<i>Source: FMP Live</i>\n\n" + response)
 
 
 def handle_squeeze(chat_id, symbol):
@@ -1783,16 +1759,13 @@ def handle_squeeze(chat_id, symbol):
         context += (f"Short interest: {short.get('shortInterest','N/A')} shares | "
                     f"Short % float: {short.get('shortPercentOfFloat','N/A')} | "
                     f"Days to cover: {short.get('daysToCover','N/A')}\n")
-    search = web_search(f"{symbol} short squeeze interest {datetime.now().strftime('%B %Y')}")
-    if search:
-        context += f"Web data:\n{search}"
     prompt = (f"Short squeeze analysis for {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
               f"Cover: short interest %, days to cover, borrow rate, float, "
               f"squeeze trigger catalyst, bull case (squeeze target), bear case (short wins), "
               f"realistic probability, entry and stop.")
     skill_prompt = get_skill_prompt("/squeeze")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"<b>{symbol} SQUEEZE ANALYSIS</b>\n<i>Source: FMP + Web</i>\n\n" + response)
+    send_message(chat_id, f"<b>{symbol} SQUEEZE ANALYSIS</b>\n<i>Source: FMP Live</i>\n\n" + response)
 
 
 def handle_ipo(chat_id, symbol):
@@ -1800,10 +1773,7 @@ def handle_ipo(chat_id, symbol):
         send_message(chat_id, "❌ Usage: /ipo TICKER or /ipo upcoming")
         return
     send_message(chat_id, f"Analyzing IPO: {symbol}...")
-    search = web_search(f"{symbol} IPO analysis valuation {datetime.now().strftime('%B %Y')}")
     context = f"IPO analysis for: {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}"
-    if search:
-        context += f"\nIPO data:\n{search}"
     prompt = (f"IPO analysis for {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
               f"Cover: business model, IPO price range, valuation vs peers, "
               f"underwriters, lock-up expiry risk, bull case (growth story), bear case (overvalued/unprofitable), "
@@ -1823,16 +1793,13 @@ def handle_fx(chat_id, pair):
     if fmp_fx:
         for r in fmp_fx[:6]:
             context += f"{r.get('ticker','')}: {r.get('bid','N/A')} / {r.get('ask','N/A')} | chg {r.get('changes',0):+.4f}\n"
-    search = web_search(f"{pair} forex currency analysis {datetime.now().strftime('%B %Y')}")
-    if search:
-        context += f"Web data:\n{search}"
     prompt = (f"Forex/currency analysis for {pair}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
               f"Cover: current trend and key levels, central bank policy differential, "
               f"macro drivers, correlation to equities/gold/commodities, "
               f"bull case (strengthens), bear case (weakens), impact on US multinationals.")
     skill_prompt = get_skill_prompt("/fx")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"<b>{pair} FX ANALYSIS</b>\n<i>Source: FMP + Web</i>\n\n" + response)
+    send_message(chat_id, f"<b>{pair} FX ANALYSIS</b>\n<i>Source: FMP Live</i>\n\n" + response)
 
 
 def handle_commodities(chat_id):
@@ -1843,9 +1810,6 @@ def handle_commodities(chat_id):
         context += "Live commodity prices:\n"
         for c in prices[:10]:
             context += f"  {c.get('symbol','')}: ${c.get('price','N/A')} ({c.get('changesPercentage',0):+.2f}%)\n"
-    search = web_search(f"commodities oil gold copper outlook {datetime.now().strftime('%B %Y')}")
-    if search:
-        context += f"Web data:\n{search}"
     prompt = (f"Commodities market overview. Today: {datetime.now().strftime('%B %d, %Y')}\n"
               f"Cover: oil (WTI/Brent) trend, gold vs real yields, silver industrial/monetary, "
               f"copper as economic signal, natural gas, ags if notable. "
@@ -1870,9 +1834,6 @@ def handle_premarket(chat_id):
         context += (f"10yr: {rates.get('year10','N/A')}% | "
                     f"2yr: {rates.get('year2','N/A')}% | "
                     f"30yr: {rates.get('year30','N/A')}%\n")
-    search = web_search(f"pre-market movers futures overnight {datetime.now().strftime('%B %d %Y')}")
-    if search:
-        context += f"Pre-market data:\n{search}"
     prompt = (f"Pre-market brief. Today: {datetime.now().strftime('%B %d, %Y')}\n"
               f"Cover: S&P 500 / Nasdaq futures direction, overnight catalysts, "
               f"major pre-market movers (up AND down) and why, key economic data releasing today, "
@@ -1902,15 +1863,12 @@ def handle_sentiment(chat_id):
             watchlist_quotes.append(f"{sym}: ${q.get('price','N/A')} ({q.get('changePercentage',0):+.2f}%)")
     if watchlist_quotes:
         context += " | ".join(watchlist_quotes) + "\n"
-    search = web_search(f"market sentiment VIX put call ratio fear greed {datetime.now().strftime('%B %Y')}")
-    if search:
-        context += f"Web data:\n{search}"
     prompt = (f"Market sentiment analysis. Today: {datetime.now().strftime('%B %d, %Y')}\n"
               f"Cover: overall risk-on/risk-off regime, VIX interpretation, sector breadth, "
               f"yield curve signal, fund flow direction, contrarian signals, positioning recommendation.")
     skill_prompt = get_skill_prompt("/sentiment")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"<b>MARKET SENTIMENT</b>\n<i>Source: FMP Live + Web</i>\n{datetime.now().strftime('%b %d, %Y')}\n\n" + response)
+    send_message(chat_id, f"<b>MARKET SENTIMENT</b>\n<i>Source: FMP Live</i>\n{datetime.now().strftime('%b %d, %Y')}\n\n" + response)
 
 
 def handle_rotation(chat_id):
@@ -1927,15 +1885,12 @@ def handle_rotation(chat_id):
         context += (f"Yields — 10yr: {rates.get('year10','N/A')}% | "
                     f"2yr: {rates.get('year2','N/A')}% | "
                     f"30yr: {rates.get('year30','N/A')}%\n")
-    search = web_search(f"sector rotation market leadership {datetime.now().strftime('%B %Y')}")
-    if search:
-        context += f"Web data:\n{search}"
     prompt = (f"Sector rotation analysis. Today: {datetime.now().strftime('%B %d, %Y')}\n"
               f"Cover: current rotation regime, top/bottom 3 sectors with macro drivers, "
               f"growth vs value, best ETF plays, highest-conviction rotation trade.")
     skill_prompt = get_skill_prompt("/rotation")
     response = ask_claude(prompt, context, skill_prompt=skill_prompt)
-    send_message(chat_id, f"<b>SECTOR ROTATION</b>\n<i>Source: FMP Live + Web</i>\n{datetime.now().strftime('%b %d, %Y')}\n\n" + response)
+    send_message(chat_id, f"<b>SECTOR ROTATION</b>\n<i>Source: FMP Live</i>\n{datetime.now().strftime('%b %d, %Y')}\n\n" + response)
 
 
 # ─────────────────────────────────────
