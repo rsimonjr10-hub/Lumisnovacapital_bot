@@ -65,6 +65,13 @@ _WEBHOOK_SECRET  = str(uuid.uuid4()).replace("-", "")   # 32-char hex, valid Tel
 _processed_updates: set = set()
 _processed_updates_lock = threading.Lock()   # makes check-and-add atomic across threads
 
+# Content-based dedup: drop identical (chat_id, text) within a short window. Catches the case
+# where Telegram delivers the same user command as two updates with DIFFERENT update_ids,
+# which the update_id set above cannot catch.
+_recent_messages: dict = {}                  # {(chat_id, text): timestamp}
+_recent_messages_lock = threading.Lock()
+_RECENT_WINDOW_SEC = 15
+
 # Web chat session history  {session_id: [{"role": ..., "content": ...}]}
 _web_sessions: dict = {}
 _WEB_MAX_HISTORY = 10
@@ -2448,6 +2455,23 @@ def _dispatch(update):
         if age > 60:
             log.warning(f"Stale message dropped (age={age}s, update_id={update_id})")
             return
+
+    # ── Content dedup — drop identical (chat, text) within the window ─
+    # Stops duplicate execution when Telegram sends the same command as two
+    # separate update_ids (which the update_id set above cannot catch).
+    now = time.time()
+    key = (chat_id, text)
+    with _recent_messages_lock:
+        last_seen = _recent_messages.get(key)
+        if last_seen is not None and (now - last_seen) < _RECENT_WINDOW_SEC:
+            log.warning(f"Duplicate content dropped (chat={chat_id}, text={text!r})")
+            return
+        _recent_messages[key] = now
+        # Prune old entries to prevent unbounded growth
+        if len(_recent_messages) > 500:
+            cutoff = now - _RECENT_WINDOW_SEC
+            for k in [k for k, ts in _recent_messages.items() if ts < cutoff]:
+                _recent_messages.pop(k, None)
 
     log.info(f"Update {update_id} — chat={chat_id} type={chat_type} from=@{username}")
 
