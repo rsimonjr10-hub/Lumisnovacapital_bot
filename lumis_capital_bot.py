@@ -55,8 +55,12 @@ _OWNER_ONLY_MSG = (
 )
 
 # Deduplication: track processed update IDs to prevent replay on restart/rolling deploy
-# Unique ID for this process — visible in startup message to detect two-instance conflicts
-_INSTANCE_ID = str(uuid.uuid4())[:8]
+# Unique ID for this process — visible in startup message and used as webhook secret token.
+# Every new deploy generates a new secret. Telegram is told the new secret, so any delivery
+# that arrives at the OLD instance (which has a different secret) is silently rejected.
+# This kills duplicate processing even when two instances briefly overlap during a rolling deploy.
+_INSTANCE_ID     = str(uuid.uuid4())[:8]
+_WEBHOOK_SECRET  = str(uuid.uuid4()).replace("-", "")   # 32-char hex, valid Telegram secret
 
 _processed_updates: set = set()
 _processed_updates_lock = threading.Lock()   # makes check-and-add atomic across threads
@@ -2317,6 +2321,13 @@ class _WebhookHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(length)
 
         if self.path == _WEBHOOK_PATH:
+            # Reject deliveries meant for a different instance — sends 200 so Telegram won't retry
+            received_secret = self.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+            if received_secret != _WEBHOOK_SECRET:
+                log.warning(f"Stale webhook rejected (secret mismatch) — old instance still draining?")
+                self.send_response(200)
+                self.end_headers()
+                return
             self.send_response(200)
             self.end_headers()
             try:
@@ -2817,7 +2828,7 @@ def run_bot():
         try:
             r = requests.post(
                 f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook",
-                json={"url": webhook_url, "drop_pending_updates": True},
+                json={"url": webhook_url, "drop_pending_updates": True, "secret_token": _WEBHOOK_SECRET},
                 timeout=10,
             )
             result = r.json()
