@@ -2536,7 +2536,22 @@ def _dispatch(update):
 # ─────────────────────────────────────
 # STARFIRE / ARGUS TOWER DISPATCHER
 # ─────────────────────────────────────
+_starfire_processed: set = set()
+_starfire_lock = threading.Lock()
+
+
 def _starfire_dispatch(payload):
+    # Dedup by request_id or ticket_id to prevent double-execution on retried payloads
+    req_id = payload.get("request_id") or payload.get("data", {}).get("ticket_id")
+    if req_id is not None:
+        with _starfire_lock:
+            if req_id in _starfire_processed:
+                log.warning(f"Duplicate STARFIRE payload {req_id} — skipping")
+                return
+            _starfire_processed.add(req_id)
+            if len(_starfire_processed) > 500:
+                _starfire_processed.clear()
+
     command = payload.get("command", "")
     data    = payload.get("data", payload)  # support flat or nested payload
 
@@ -2909,12 +2924,8 @@ def run_bot():
                     for update in updates["result"]:
                         update_id = update["update_id"]
                         offset = update_id + 1
-                        message = update.get("message", {})
-                        chat_id = message.get("chat", {}).get("id")
-                        text = message.get("text", "")
-                        if chat_id and text:
-                            log.info(f"Update {update_id} — chat_id={chat_id} text={text!r}")
-                            process_command(str(chat_id), text)
+                        # Route through _dispatch so dedup + staleness checks apply
+                        _dispatch(update)
                 elif not updates.get("ok"):
                     log.error(f"getUpdates error: {updates}")
                 if not _shutdown:
