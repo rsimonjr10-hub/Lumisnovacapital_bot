@@ -1487,11 +1487,11 @@ def handle_help(chat_id):
 <b>Stock Research:</b>
 /full [TICKER] — Deep analysis: moat, valuation, bull/bear
 /opinion [TICKER] — Quick honest take
-/technical [TICKER] — Chart analysis, RSI, MACD, levels
-/options [TICKER] — Options flow, IV, best strategies
+/ta [TICKER] — Technical analysis: RSI, MACD, SMA, Bollinger Bands
+/ta [TICKER] [BUY/SELL] [QTY] [@PRICE] — Add direction for trade verdict
+/options [TICKER] — Options strategies anchored to computed volatility
 /insider [TICKER] — Insider buying/selling activity
 /risk [TICKER] — Position risk check + sizing
-/ta [TICKER] [BUY/SELL] [QTY] [@PRICE] — Algorithmic trade analysis (RSI, MACD, SMA, BB + reasoning)
 /squeeze [TICKER] — Short squeeze potential
 /ipo [TICKER] — IPO analysis
 
@@ -1536,11 +1536,11 @@ def handle_pals(chat_id):
         + web_link +
         "\n\n<b>Research any stock:</b>\n"
         "/full [TICKER] — Deep analysis: moat, valuation, bull/bear\n"
-        "/technical [TICKER] — Chart analysis, RSI, MACD, levels\n"
-        "/options [TICKER] — Options flow, IV, strategies\n"
+        "/ta [TICKER] — Technical analysis (RSI, MACD, SMA, Bollinger Bands)\n"
+        "/ta [TICKER] BUY|SELL — Add direction for full trade verdict\n"
+        "/options [TICKER] — Options strategies with computed volatility\n"
         "/insider [TICKER] — Insider buying/selling activity\n"
         "/risk [TICKER] — Position risk + sizing for $10K\n"
-        "/ta [TICKER] [BUY/SELL] [QTY] [@PRICE] — Algorithmic trade analysis\n"
         "/invest [TICKER] — Long-term thesis + DCA plan\n"
         "/opinion [TICKER] — Quick honest take\n"
         "/squeeze [TICKER] — Short squeeze potential\n"
@@ -2131,23 +2131,24 @@ def handle_rotation(chat_id):
 
 def handle_ta(chat_id, args):
     """
-    /ta TICKER DIRECTION [QTY] [@PRICE]
+    /ta TICKER [DIRECTION] [QTY] [@PRICE]
+
+    No direction  → pure technical analysis (chart read, bull/bear levels)
+    With direction → pre-trade checklist with verdict
+
     Examples:
-      /ta NVDA BUY 10 @145.50
-      /ta ASTS LONG 50
-      /ta SOFI SHORT
-    Uses computed technical indicators (RSI, MACD, SMA, Bollinger Bands)
-    and extended reasoning for deeper analysis.
+      /ta NVDA            — pure technical read
+      /ta NVDA BUY        — trade analysis at current price
+      /ta NVDA BUY 10 @145.50  — full trade setup with entry/sizing
     """
     if not args:
         send_message(chat_id, (
-            "❌ Usage: /ta TICKER DIRECTION [QTY] [@PRICE]\n\n"
+            "❌ Usage: /ta TICKER [BUY|LONG|SELL|SHORT] [QTY] [@PRICE]\n\n"
             "Examples:\n"
-            "  /ta NVDA BUY 10 @145.50\n"
-            "  /ta ASTS LONG 50\n"
-            "  /ta SOFI SHORT\n\n"
-            "DIRECTION: BUY, LONG, SELL, or SHORT\n"
-            "<i>Includes RSI, MACD, SMA, Bollinger Bands + extended reasoning</i>"
+            "  /ta NVDA — technical analysis (chart, levels, indicators)\n"
+            "  /ta NVDA BUY — trade setup analysis at current price\n"
+            "  /ta NVDA BUY 10 @145.50 — full trade analysis\n\n"
+            "<i>RSI · MACD · SMA20/50 · Bollinger Bands · Extended reasoning</i>"
         ))
         return
 
@@ -2157,17 +2158,13 @@ def handle_ta(chat_id, args):
         send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>. Use 1–5 uppercase letters.")
         return
 
-    direction = tokens[1] if len(tokens) > 1 else ""
-    if direction not in {"BUY", "LONG", "SELL", "SHORT"}:
-        send_message(chat_id, (
-            f"❌ Direction must be BUY, LONG, SELL, or SHORT.\n"
-            f"Example: /ta {symbol} BUY 10 @145.50"
-        ))
-        return
+    # Detect direction if provided
+    direction = tokens[1] if len(tokens) > 1 and tokens[1] in {"BUY", "LONG", "SELL", "SHORT"} else ""
+    trade_mode = bool(direction)
 
     qty = None
     entry_price = None
-    for tok in tokens[2:]:
+    for tok in tokens[(2 if trade_mode else 1):]:
         clean = tok.lstrip("@$")
         try:
             val = float(clean)
@@ -2178,19 +2175,23 @@ def handle_ta(chat_id, args):
         except ValueError:
             pass
 
-    send_message(chat_id, f"Running algorithmic analysis for {direction} {symbol}...")
+    if trade_mode:
+        send_message(chat_id, f"Running algorithmic analysis for {direction} {symbol}...")
+    else:
+        send_message(chat_id, f"Running technical analysis for {symbol}...")
 
     quote   = get_stock_quote(symbol)
     metrics = get_key_metrics(symbol)
     hist    = get_historical_prices(symbol, days=90)
 
     context = f"Today: {datetime.now().strftime('%B %d, %Y')}\n"
-    context += f"Trade setup: {direction} {symbol}"
-    if qty:
-        context += f", {qty} shares"
-    if entry_price:
-        context += f", target entry @ ${entry_price:.2f}"
-    context += "\n"
+    if trade_mode:
+        context += f"Trade setup: {direction} {symbol}"
+        if qty:
+            context += f", {qty} shares"
+        if entry_price:
+            context += f", target entry @ ${entry_price:.2f}"
+        context += "\n"
 
     current_price = None
     if quote and "_error" not in quote:
@@ -2201,11 +2202,11 @@ def handle_ta(chat_id, args):
             f"Beta: {quote.get('beta','N/A')} | "
             f"52wk ${quote.get('yearLow','N/A')}–${quote.get('yearHigh','N/A')}\n"
         )
-        if entry_price and current_price:
+        if trade_mode and entry_price and current_price:
             gap_pct = ((current_price - entry_price) / entry_price) * 100
             label = "above" if gap_pct > 0 else "below"
             context += f"Entry vs current: {abs(gap_pct):.2f}% {label} target entry\n"
-        if qty and current_price:
+        if trade_mode and qty and current_price:
             context += f"Position value at current price: ${qty * current_price:,.0f}\n"
 
     if metrics:
@@ -2216,7 +2217,7 @@ def handle_ta(chat_id, args):
             f"ROE: {metrics.get('roe','N/A')}\n"
         )
 
-    # ── Algorithmic indicators from historical prices ──────────────────
+    # ── Algorithmic indicators ─────────────────────────────────────────
     if hist:
         sorted_hist = sorted(hist, key=lambda x: x.get("date", ""))
         closes  = [d["close"]  for d in sorted_hist if d.get("close")]
@@ -2225,30 +2226,26 @@ def handle_ta(chat_id, args):
         if len(closes) >= 15:
             rsi = _calc_rsi(closes)
             if rsi is not None:
-                signal = "overbought" if rsi > 70 else ("oversold" if rsi < 30 else "neutral")
-                context += f"RSI(14): {rsi} ({signal})\n"
+                rsi_signal = "overbought" if rsi > 70 else ("oversold" if rsi < 30 else "neutral")
+                context += f"RSI(14): {rsi} ({rsi_signal})\n"
 
             sma20 = _calc_sma(closes, 20)
             sma50 = _calc_sma(closes, 50)
             if sma20:
-                vs20 = f"{'above' if current_price and current_price > sma20 else 'below'}" if current_price else "N/A"
+                vs20 = ("above" if current_price and current_price > sma20 else "below") if current_price else "N/A"
                 context += f"SMA20: ${sma20} (price {vs20})"
             if sma50:
-                vs50 = f"{'above' if current_price and current_price > sma50 else 'below'}" if current_price else "N/A"
+                vs50 = ("above" if current_price and current_price > sma50 else "below") if current_price else "N/A"
                 context += f"  |  SMA50: ${sma50} (price {vs50})\n"
             elif sma20:
                 context += "\n"
-
             if sma20 and sma50:
-                cross = "bullish stack (20>50)" if sma20 > sma50 else "bearish stack (50>20)"
-                context += f"MA alignment: {cross}\n"
+                context += f"MA alignment: {'bullish stack (20>50)' if sma20 > sma50 else 'bearish stack (50>20)'}\n"
 
             macd_line, signal_line, macd_hist = _calc_macd(closes)
             if macd_line is not None:
                 trend = "bullish" if macd_hist and macd_hist > 0 else "bearish"
-                cross_note = ""
-                if signal_line is not None:
-                    cross_note = " (above signal)" if macd_line > signal_line else " (below signal)"
+                cross_note = (" (above signal)" if macd_line > signal_line else " (below signal)") if signal_line is not None else ""
                 context += f"MACD: {macd_line}{cross_note} | Signal: {signal_line} | Histogram: {macd_hist} ({trend})\n"
 
             bb_lower, bb_mid, bb_upper = _calc_bollinger(closes)
@@ -2256,7 +2253,7 @@ def handle_ta(chat_id, args):
                 bb_pos = round((current_price - bb_lower) / (bb_upper - bb_lower) * 100, 1) if bb_upper != bb_lower else 50
                 context += f"Bollinger Bands: ${bb_lower} / ${bb_mid} / ${bb_upper} | Price at {bb_pos}% of band\n"
 
-        if volumes and closes:
+        if volumes:
             avg_vol = sum(volumes[-20:]) / min(len(volumes), 20)
             last_vol = volumes[-1]
             vol_ratio = round(last_vol / avg_vol, 2) if avg_vol else None
@@ -2269,42 +2266,59 @@ def handle_ta(chat_id, args):
             period_low  = min(closes[-20:])
             context += f"20d range: ${period_low:.2f}–${period_high:.2f}"
             if current_price:
-                pct_from_high = round((period_high - current_price) / period_high * 100, 1)
-                pct_from_low  = round((current_price - period_low)  / period_low  * 100, 1)
-                context += f" | {pct_from_high}% from high, {pct_from_low}% from low"
+                context += f" | {round((period_high - current_price) / period_high * 100, 1)}% from high, {round((current_price - period_low) / period_low * 100, 1)}% from low"
             context += "\n"
 
-    search = web_search(f"{symbol} stock trade setup news {datetime.now().strftime('%B %Y')}")
+    search = web_search(f"{symbol} stock {'trade setup' if trade_mode else 'technical analysis chart'} {datetime.now().strftime('%B %Y')}")
     if search:
         context += f"Web data:\n{search}"
 
-    direction_label = "LONG (BUY)" if direction in ("BUY", "LONG") else "SHORT (SELL)"
-    entry_line  = f"Target entry: ${entry_price:.2f}" if entry_price else "No specific entry — analyze at current price"
-    sizing_line = f"Quantity: {qty} shares" if qty else "No quantity specified"
-
-    prompt = (
-        f"Algorithmic trade analysis for {direction_label} {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
-        f"{entry_line} | {sizing_line}\n\n"
-        f"You have computed technical indicators above. Use them precisely.\n"
-        f"Cover:\n"
-        f"1. VERDICT upfront: STRONG SETUP / NEUTRAL / AVOID\n"
-        f"2. Entry quality — RSI, Bollinger position, key levels\n"
-        f"3. MACD + MA alignment — bullish or bearish technical picture\n"
-        f"4. Trade thesis and setup type (breakout, pullback, reversal, momentum)\n"
-        f"5. Risk/reward — specific price targets: upside and stop loss\n"
-        f"6. Position sizing for $10K account using 1–2% risk rule\n"
-        f"7. Red flags or headwinds specific to this setup\n\n"
-        f"Be direct. Push back on bad entries. Keep response under 3800 characters."
-    )
     skill_prompt = get_skill_prompt("/ta")
-    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt)
 
-    header = f"<b>{symbol} TRADE ANALYSIS — {direction}</b>\n<i>Algo indicators + Reasoning | FMP Live + Web</i>\n"
-    if entry_price:
-        header += f"<i>Entry: ${entry_price:.2f}</i>"
-    if qty:
-        header += f"  |  <i>{qty} shares</i>"
-    header = header.rstrip() + "\n"
+    if trade_mode:
+        direction_label = "LONG (BUY)" if direction in ("BUY", "LONG") else "SHORT (SELL)"
+        entry_line  = f"Target entry: ${entry_price:.2f}" if entry_price else "No specific entry — analyze at current price"
+        sizing_line = f"Quantity: {qty} shares" if qty else "No quantity specified"
+        prompt = (
+            f"Algorithmic trade analysis for {direction_label} {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+            f"{entry_line} | {sizing_line}\n\n"
+            f"You have computed technical indicators above. Use them precisely.\n"
+            f"Cover:\n"
+            f"1. VERDICT upfront: STRONG SETUP / NEUTRAL / AVOID\n"
+            f"2. Entry quality — RSI, Bollinger position, key levels\n"
+            f"3. MACD + MA alignment — bullish or bearish technical picture\n"
+            f"4. Trade thesis and setup type (breakout, pullback, reversal, momentum)\n"
+            f"5. Risk/reward — specific price targets: upside and stop loss\n"
+            f"6. Position sizing for $10K account using 1–2% risk rule\n"
+            f"7. Red flags or headwinds specific to this setup\n\n"
+            f"Be direct. Push back on bad entries. Keep response under 3800 characters."
+        )
+        response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt)
+        header = f"<b>{symbol} TRADE ANALYSIS — {direction}</b>\n<i>Algo indicators + Reasoning | FMP Live + Web</i>\n"
+        if entry_price:
+            header += f"<i>Entry: ${entry_price:.2f}</i>"
+        if qty:
+            header += f"  |  <i>{qty} shares</i>"
+        header = header.rstrip() + "\n"
+    else:
+        prompt = (
+            f"Technical analysis for {symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n\n"
+            f"You have computed technical indicators above. Use them precisely.\n"
+            f"Cover:\n"
+            f"1. Trend direction — short-term (daily), medium-term (weekly)\n"
+            f"2. Key support levels (3) and resistance levels (3) with rationale\n"
+            f"3. RSI read — overbought/oversold/neutral and what it means\n"
+            f"4. MACD — crossover status, histogram trend, what it signals\n"
+            f"5. MA stack — price vs 20MA and 50MA, golden/death cross status\n"
+            f"6. Volume — confirming or diverging from price action?\n"
+            f"7. Chart pattern if present (breakout, flag, wedge, base, etc.)\n"
+            f"8. BULL CASE: what the chart looks like if this goes up — target\n"
+            f"9. BEAR CASE: what breaks down and where the floor is\n\n"
+            f"Every level must use the exact computed prices. Keep response under 3800 characters."
+        )
+        response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt)
+        header = f"<b>{symbol} TECHNICAL ANALYSIS</b>\n<i>Algo indicators + Reasoning | FMP Live + Web</i>\n"
+
     send_message(chat_id, header + "\n" + response)
 
 
@@ -2427,7 +2441,7 @@ def process_command(chat_id, text):
         "/portfolio":   lambda: handle_portfolio(chat_id, rest) if _is_owner(chat_id) else send_message(chat_id, _OWNER_ONLY_MSG),
         "/price":       lambda: handle_price(chat_id, argument),
         "/test":        lambda: handle_test(chat_id) if _is_owner(chat_id) else send_message(chat_id, _OWNER_ONLY_MSG),
-        "/technical":   lambda: handle_technical(chat_id, argument),
+
         "/options":     lambda: handle_options(chat_id, argument),
         "/crypto":      lambda: handle_crypto(chat_id, argument),
         "/etf":         lambda: handle_etf(chat_id, argument),
