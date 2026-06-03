@@ -591,6 +591,10 @@ def get_income_statement(symbol, period="annual"):
     return _fmp_get("income-statement", {"symbol": symbol, "period": period, "limit": 1}, f"income/{symbol}")
 
 
+def get_cash_flow_statement(symbol, period="annual"):
+    return _fmp_get("cash-flow-statement", {"symbol": symbol, "period": period, "limit": 3}, f"cashflow/{symbol}")
+
+
 def get_earnings_surprises(symbol):
     url = f"{_FMP_BASE}/earnings-surprises"
     try:
@@ -1495,6 +1499,13 @@ def handle_help(chat_id):
 /squeeze [TICKER] — Short squeeze potential
 /ipo [TICKER] — IPO analysis
 
+<b>Institutional Research (Financial Services):</b>
+/comps [TICKER] — Comparable company analysis: peer multiples, positioning
+/dcf [TICKER] — DCF intrinsic value model: bull/base/bear scenarios
+/thesis [TICKER] — Investment thesis: pillars, risks, catalysts, conviction
+/ep [TICKER] — Earnings preview: 3-scenario framework + trade setup
+/screen [STYLE] — Stock ideas: value/growth/quality/short/special or [theme]
+
 <b>Sectors & Comparison:</b>
 /scout — 3 fresh weekly picks (rotates sectors)
 /sector [SECTOR] — Sector deep dive
@@ -1546,6 +1557,12 @@ def handle_pals(chat_id):
         "/squeeze [TICKER] — Short squeeze potential\n"
         "/compare [T1] [T2] — Head-to-head\n"
         "/dividend [TICKER] — Dividend sustainability\n\n"
+        "<b>Institutional research:</b>\n"
+        "/comps [TICKER] — Peer multiples and valuation positioning\n"
+        "/dcf [TICKER] — DCF intrinsic value: bull/base/bear\n"
+        "/thesis [TICKER] — Thesis pillars, risks, catalysts, conviction\n"
+        "/ep [TICKER] — Earnings preview: 3-scenario framework\n"
+        "/screen [STYLE] — Ideas: value/growth/quality/short/special\n\n"
         "<b>Market intelligence:</b>\n"
         "/sentiment — VIX, breadth, fund flows, verdict\n"
         "/rotation — Where money is moving right now\n"
@@ -2309,6 +2326,274 @@ def handle_ta(chat_id, args):
 
 
 # ─────────────────────────────────────
+# FINANCIAL SERVICES SKILL HANDLERS
+# ─────────────────────────────────────
+
+def handle_comps(chat_id, symbol):
+    if not symbol:
+        send_message(chat_id, "❌ Usage: /comps TICKER\nExample: /comps NVDA")
+        return
+    symbol = symbol.strip().upper()
+    if not _valid_ticker(symbol):
+        send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>.")
+        return
+    send_message(chat_id, f"Building comparable company analysis for {symbol}...")
+    quote   = get_stock_quote(symbol)
+    metrics = get_key_metrics(symbol)
+    ratios  = get_financial_ratios(symbol)
+    income  = get_income_statement(symbol)
+
+    context = f"{symbol} — Comparable Analysis | Today: {datetime.now().strftime('%B %d, %Y')}\n"
+    context += _fmt_fundamentals(symbol, quote, metrics, ratios, None, income)
+
+    search = web_search(f"{symbol} peer valuation comparable companies EV EBITDA revenue multiple {datetime.now().strftime('%B %Y')}")
+    if search:
+        context += f"\nPeer/comps web data:\n{search}"
+
+    prompt = (
+        f"Comparable company analysis for ${symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+        f"1. Identify 4-6 true peer companies (same sector, business model, scale)\n"
+        f"2. Operating metrics table: Revenue, Revenue Growth, Gross Margin, EBITDA Margin, FCF Margin for each peer (use web data)\n"
+        f"3. Valuation multiples table: EV/Revenue, EV/EBITDA, P/E (NTM), FCF Yield for target and peers\n"
+        f"4. Statistical benchmarks: median and quartiles for key multiples\n"
+        f"5. Positioning verdict: premium, discount, or in-line? What justifies it?\n"
+        f"6. Bull case: where multiple re-rates to and why\n"
+        f"7. Bear case: where it de-rates to and why\n"
+        f"Keep under 3800 characters. Use actual numbers from data — no vague ranges."
+    )
+    skill_prompt = get_skill_prompt("/comps")
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt, thinking_budget=16000)
+    send_message(chat_id, f"<b>{symbol} COMPARABLE ANALYSIS</b>\n<i>Source: FMP + Web | Peer Multiples</i>\n\n" + response)
+
+
+def handle_dcf(chat_id, symbol):
+    if not symbol:
+        send_message(chat_id, "❌ Usage: /dcf TICKER\nExample: /dcf MSFT")
+        return
+    symbol = symbol.strip().upper()
+    if not _valid_ticker(symbol):
+        send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>.")
+        return
+    send_message(chat_id, f"Running DCF valuation model for {symbol}...")
+    quote    = get_stock_quote(symbol)
+    metrics  = get_key_metrics(symbol)
+    ratios   = get_financial_ratios(symbol)
+    income   = get_income_statement(symbol)
+    cashflow = get_cash_flow_statement(symbol)
+
+    context = f"{symbol} — DCF Model | Today: {datetime.now().strftime('%B %d, %Y')}\n"
+    context += _fmt_fundamentals(symbol, quote, metrics, ratios, None, income)
+
+    if cashflow and isinstance(cashflow, list):
+        for cf in cashflow[:3]:
+            yr   = cf.get("calendarYear", cf.get("date", "N/A"))
+            ocf  = cf.get("operatingCashFlow", "N/A")
+            capex = cf.get("capitalExpenditure", "N/A")
+            fcf_raw = (ocf - abs(capex)) if isinstance(ocf, (int, float)) and isinstance(capex, (int, float)) else "N/A"
+            context += f"CF {yr}: Operating CF ${ocf:,} | CapEx ${capex:,} | FCF ${fcf_raw:,}\n" if isinstance(fcf_raw, (int, float)) else f"CF {yr}: Operating CF {ocf} | CapEx {capex}\n"
+
+    search = web_search(f"{symbol} DCF intrinsic value analyst price target {datetime.now().strftime('%B %Y')}")
+    if search:
+        context += f"\nAnalyst/DCF web data:\n{search}"
+
+    prompt = (
+        f"DCF intrinsic value analysis for ${symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+        f"Use the cash flow data above to anchor the model:\n"
+        f"1. State the FCF base (most recent year, compute as Operating CF - CapEx)\n"
+        f"2. Project FCF for 5 years under bull/base/bear growth assumptions (state each rate and justify)\n"
+        f"3. Estimate WACC: cost of equity (risk-free + beta × ERP), cost of debt, weighting\n"
+        f"4. Terminal value: Gordon Growth Model (g=2.5%) AND exit EV/EBITDA multiple\n"
+        f"5. Intrinsic value per share under all three scenarios\n"
+        f"6. Sensitivity: show how value changes with ±1% WACC and ±2% FCF growth\n"
+        f"7. Margin of safety: compare to current price — cheap, fair, or expensive?\n"
+        f"8. At what price would this be an obvious buy (33% MoS)?\n"
+        f"Keep under 3800 characters. Show the math explicitly."
+    )
+    skill_prompt = get_skill_prompt("/dcf")
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt, thinking_budget=16000)
+    send_message(chat_id, f"<b>{symbol} DCF MODEL</b>\n<i>Source: FMP Cash Flow + Reasoning Engine</i>\n\n" + response)
+
+
+def handle_thesis(chat_id, symbol):
+    if not symbol:
+        send_message(chat_id, "❌ Usage: /thesis TICKER\nExample: /thesis AAPL")
+        return
+    symbol = symbol.strip().upper()
+    if not _valid_ticker(symbol):
+        send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>.")
+        return
+    send_message(chat_id, f"Building investment thesis framework for {symbol}...")
+    quote     = get_stock_quote(symbol)
+    metrics   = get_key_metrics(symbol)
+    ratios    = get_financial_ratios(symbol)
+    income    = get_income_statement(symbol)
+    consensus = get_analyst_consensus(symbol)
+    surprises = get_earnings_surprises(symbol)
+    news      = get_ticker_news(symbol, limit=5)
+
+    context = f"{symbol} — Thesis Tracker | Today: {datetime.now().strftime('%B %d, %Y')}\n"
+    context += _fmt_fundamentals(symbol, quote, metrics, ratios, consensus, income)
+    if surprises:
+        context += "Earnings surprises (last 4):\n" + "\n".join(
+            f"  {s.get('date','')}: actual {s.get('actualEarningResult','N/A')} vs est {s.get('estimatedEarning','N/A')}"
+            for s in surprises
+        ) + "\n"
+    if news:
+        context += "Recent news:\n" + "\n".join(f"  - {n.get('title','')}" for n in news) + "\n"
+
+    search = web_search(f"{symbol} investment thesis catalysts risks {datetime.now().strftime('%B %Y')}")
+    if search:
+        context += f"\nThesis/catalyst web data:\n{search}"
+
+    prompt = (
+        f"Investment thesis framework for ${symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+        f"Build a complete, falsifiable thesis:\n"
+        f"1. Core thesis: one sentence (Long/Short + primary reason)\n"
+        f"2. Thesis pillars (3-5): each with current evidence and On Track/Watch/Concerning status\n"
+        f"3. Key risks (3-5): each with what would invalidate the thesis\n"
+        f"4. Catalyst calendar: next 3-6 months (earnings dates, catalysts, binary events)\n"
+        f"5. Scorecard: rate revenue growth, margins, moat, management, valuation\n"
+        f"6. Conviction level: HIGH/MEDIUM/LOW with reasoning\n"
+        f"7. 12-18 month price target if thesis plays out\n"
+        f"8. Stop loss / thesis invalidation trigger\n"
+        f"9. Bull case and Bear case\n"
+        f"Keep under 3800 characters. Be direct — name specific numbers and dates."
+    )
+    skill_prompt = get_skill_prompt("/thesis")
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt, thinking_budget=16000)
+    send_message(chat_id, f"<b>{symbol} INVESTMENT THESIS</b>\n<i>Source: FMP + Web | Thesis Framework</i>\n\n" + response)
+
+
+def handle_ep(chat_id, symbol):
+    if not symbol:
+        send_message(chat_id, "❌ Usage: /ep TICKER\nExample: /ep NVDA")
+        return
+    symbol = symbol.strip().upper()
+    if not _valid_ticker(symbol):
+        send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>.")
+        return
+    send_message(chat_id, f"Building earnings preview for {symbol}...")
+    quote     = get_stock_quote(symbol)
+    metrics   = get_key_metrics(symbol)
+    income    = get_income_statement(symbol)
+    consensus = get_analyst_consensus(symbol)
+    surprises = get_earnings_surprises(symbol)
+    hist      = get_historical_prices(symbol, days=90)
+
+    context = f"{symbol} — Earnings Preview | Today: {datetime.now().strftime('%B %d, %Y')}\n"
+    context += _fmt_fundamentals(symbol, quote, metrics, None, consensus, income)
+    if surprises:
+        context += "Beat/miss history (last 4):\n" + "\n".join(
+            f"  {s.get('date','')}: actual {s.get('actualEarningResult','N/A')} vs est {s.get('estimatedEarning','N/A')}"
+            for s in surprises
+        ) + "\n"
+
+    if hist:
+        sorted_hist = sorted(hist, key=lambda x: x.get("date", ""))
+        closes = [d["close"] for d in sorted_hist if d.get("close")]
+        if len(closes) >= 20:
+            hv = _calc_historical_volatility(closes)
+            if hv and quote:
+                price = quote.get("price")
+                if price:
+                    em = _calc_expected_move(price, hv, 1)
+                    if em:
+                        context += f"Historical vol (annualized): {hv}% | Options-implied 1-day expected move: ±${em:.2f}\n"
+
+    search = web_search(f"{symbol} earnings date estimate consensus whisper {datetime.now().strftime('%B %Y')}")
+    if search:
+        context += f"\nEarnings consensus/web data:\n{search}"
+
+    prompt = (
+        f"Earnings preview for ${symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+        f"Build a complete pre-earnings analysis:\n"
+        f"1. Earnings setup: quarter, date/time (pre/post market), consensus EPS and revenue estimate\n"
+        f"2. Top 3-5 metrics that will determine the stock's reaction (rank by importance)\n"
+        f"3. Scenario analysis with stock price reaction:\n"
+        f"   BULL: what beats look like, stock +X%\n"
+        f"   BASE: in-line, stock ±X%\n"
+        f"   BEAR: miss/cut, stock -X%\n"
+        f"4. Historical context: last 4 quarters beat/miss record, average post-earnings move\n"
+        f"5. Options-implied move vs your scenario range\n"
+        f"6. Trade setup: hold through / protect with options / avoid\n"
+        f"7. Verdict: Strong setup / Neutral / Avoid earnings risk\n"
+        f"Keep under 3800 characters. Use specific percentages and dates."
+    )
+    skill_prompt = get_skill_prompt("/ep")
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt, thinking_budget=16000)
+    send_message(chat_id, f"<b>{symbol} EARNINGS PREVIEW</b>\n<i>Source: FMP + Web | 3-Scenario Framework</i>\n\n" + response)
+
+
+def handle_screen(chat_id, style):
+    style_clean = style.strip().lower() if style else "growth"
+    valid_styles = {"value", "growth", "quality", "short", "special"}
+    is_thematic = style_clean not in valid_styles and style_clean != ""
+    display_style = style_clean.upper() if style_clean else "GROWTH"
+
+    send_message(chat_id, f"Running {display_style} screen for investment ideas...")
+
+    context = f"Stock Screen — {display_style} | Today: {datetime.now().strftime('%B %d, %Y')}\n"
+    market_news = get_stock_news()
+    if market_news:
+        context += "Market context:\n" + "\n".join(f"  - {n.get('title','')}" for n in market_news[:4]) + "\n"
+
+    if is_thematic:
+        search_q = f"{style_clean} stocks investment theme 2025 top picks sector analysis"
+    else:
+        style_queries = {
+            "value": "undervalued stocks low PE high FCF yield value screen 2025",
+            "growth": "high growth stocks revenue acceleration momentum 2025",
+            "quality": "quality stocks high ROIC consistent growth moat 2025",
+            "short": "short candidates deteriorating fundamentals overvalued stocks 2025",
+            "special": "spin-offs special situations activist targets restructuring 2025",
+        }
+        search_q = style_queries.get(style_clean, f"{style_clean} stock ideas 2025")
+
+    search = web_search(search_q)
+    if search:
+        context += f"\nScreen/theme web data:\n{search}"
+
+    if is_thematic:
+        screen_instructions = (
+            f"This is a THEMATIC screen for: '{style_clean}'\n"
+            f"Map the value chain for this theme. Find pure-plays vs diversified exposure.\n"
+            f"Identify 5 under-appreciated beneficiaries the market hasn't fully priced in.\n"
+            f"For second-order plays: explain the connection that the consensus overlooks."
+        )
+    else:
+        style_criteria = {
+            "value":   "P/E below sector median, EV/EBITDA below historical average, FCF yield >5%, insider buying, dividend yield above market",
+            "growth":  "Revenue growth >15% YoY, growth accelerating, expanding margins, ROIC >15%, strong net retention",
+            "quality": "Consistent revenue growth 5+ years, stable/expanding margins, ROE >15%, low debt/equity, high FCF conversion",
+            "short":   "Declining revenue or decelerating growth, margin compression, rising receivables vs sales, insider selling, valuation premium without justification",
+            "special": "Recent spin-offs, post-restructuring, activist involvement, management changes at underperformer, lockup expirations",
+        }
+        screen_instructions = (
+            f"This is a {style_clean.upper()} screen.\n"
+            f"Screening criteria: {style_criteria.get(style_clean, '')}\n"
+            f"Find 5 stocks that genuinely pass these criteria right now based on the web data."
+        )
+
+    prompt = (
+        f"Stock idea generation — {display_style} screen. Today: {datetime.now().strftime('%B %d, %Y')}\n\n"
+        f"{screen_instructions}\n\n"
+        f"For each of the 5 ideas:\n"
+        f"1. Ticker + company + sector + market cap tier\n"
+        f"2. One-line thesis: why mispriced or why now\n"
+        f"3. Screen fit: which specific criteria it passes\n"
+        f"4. What the market is missing\n"
+        f"5. Catalyst: what unlocks value in 3-12 months\n"
+        f"6. Bull case: price target and timeline\n"
+        f"7. Bear case: what goes wrong, stop level\n"
+        f"8. Next step: ready to buy / needs more diligence / catalyst required first\n\n"
+        f"Keep under 3800 characters. Be specific — name exact tickers, not sectors."
+    )
+    skill_prompt = get_skill_prompt("/screen")
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt, thinking_budget=16000)
+    send_message(chat_id, f"<b>{display_style} SCREEN — 5 IDEAS</b>\n<i>{datetime.now().strftime('%b %d, %Y')} | FMP + Web</i>\n\n" + response)
+
+
+# ─────────────────────────────────────
 # STARFIRE TELEGRAM TICKET PARSER
 # ─────────────────────────────────────
 def _parse_telegram_ticket(text):
@@ -2439,6 +2724,12 @@ def process_command(chat_id, text):
         "/sentiment":   lambda: handle_sentiment(chat_id),
         "/rotation":    lambda: handle_rotation(chat_id),
         "/ta":          lambda: handle_ta(chat_id, rest),
+
+        "/comps":       lambda: handle_comps(chat_id, argument),
+        "/dcf":         lambda: handle_dcf(chat_id, argument),
+        "/thesis":      lambda: handle_thesis(chat_id, argument),
+        "/ep":          lambda: handle_ep(chat_id, argument),
+        "/screen":      lambda: handle_screen(chat_id, rest),
     }
 
     handler = routes.get(command)
