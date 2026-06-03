@@ -93,6 +93,11 @@ _SKIP_WORDS = {
     "NASDAQ", "ABOUT", "AFTER", "AGAIN", "COULD", "FIRST", "FOUND",
     "GREAT", "THOSE", "THREE", "WHERE", "WHICH", "WHILE", "WOULD",
     "THEIR", "THERE", "THESE", "THINK", "TODAY", "TRADE", "STOCK",
+    # Analysis jargon — not tickers
+    "DCF", "RSI", "MACD", "ETF", "IPO", "EPS", "FCF", "PE", "PEG",
+    "TA", "EP", "MA", "SMA", "EMA", "IV", "HV", "ATH", "ATL", "YTD",
+    "AUM", "NAV", "ROE", "ROA", "ROIC", "EBITDA", "LBO", "MBO", "SPY",
+    "QQQ", "DXY", "CPI", "GDP", "FED", "BUY", "SELL", "LONG", "SHORT",
 }
 
 # ─────────────────────────────────────
@@ -1514,6 +1519,11 @@ def handle_help(chat_id):
 /dcf [TICKER] — DCF intrinsic value model: bull/base/bear scenarios
 /thesis [TICKER] — Investment thesis: pillars, risks, catalysts, conviction
 /ep [TICKER] — Earnings preview: 3-scenario framework + trade setup
+/ea [TICKER] — Post-earnings beat/miss analysis + thesis impact
+/catalyst [TICKER] — Catalyst calendar: next 3-6 months of events
+/ue [TICKER] — Unit economics: Rule of 40, LTV/CAC, net retention
+/memo [TICKER] — IC-style investment memo: formal recommendation
+/merger [T1] [T2] — M&A accretion/dilution model
 /screen [STYLE] — Stock ideas: value/growth/quality/short/special or [theme]
 
 <b>Sectors & Comparison:</b>
@@ -1571,7 +1581,12 @@ def handle_pals(chat_id):
         "/comps [TICKER] — Peer multiples and valuation positioning\n"
         "/dcf [TICKER] — DCF intrinsic value: bull/base/bear\n"
         "/thesis [TICKER] — Thesis pillars, risks, catalysts, conviction\n"
-        "/ep [TICKER] — Earnings preview: 3-scenario framework\n"
+        "/ep [TICKER] — Pre-earnings 3-scenario framework\n"
+        "/ea [TICKER] — Post-earnings beat/miss + thesis impact\n"
+        "/catalyst [TICKER] — Catalyst calendar: next 3-6 months\n"
+        "/ue [TICKER] — Unit economics: Rule of 40, LTV/CAC, retention\n"
+        "/memo [TICKER] — Full IC investment memo + recommendation\n"
+        "/merger [T1] [T2] — M&A accretion/dilution model\n"
         "/screen [STYLE] — Ideas: value/growth/quality/short/special\n\n"
         "<b>Market intelligence:</b>\n"
         "/sentiment — VIX, breadth, fund flows, verdict\n"
@@ -2617,6 +2632,259 @@ def handle_screen(chat_id, style):
     send_message(chat_id, f"<b>{display_style} SCREEN — 5 IDEAS</b>\n<i>{datetime.now().strftime('%b %d, %Y')} | FMP + Web</i>\n\n" + response)
 
 
+def handle_ea(chat_id, symbol):
+    if not symbol:
+        send_message(chat_id, "❌ Usage: /ea TICKER\nExample: /ea NVDA")
+        return
+    symbol = symbol.strip().upper()
+    if not _valid_ticker(symbol):
+        send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>.")
+        return
+    send_message(chat_id, f"Analyzing most recent earnings results for {symbol}...")
+    quote     = get_stock_quote(symbol)
+    metrics   = get_key_metrics(symbol)
+    ratios    = get_financial_ratios(symbol)
+    income    = get_income_statement(symbol)
+    consensus = get_analyst_consensus(symbol)
+    surprises = get_earnings_surprises(symbol)
+    news      = get_ticker_news(symbol, limit=5)
+
+    context = f"{symbol} — Post-Earnings Analysis | Today: {datetime.now().strftime('%B %d, %Y')}\n"
+    context += _fmt_fundamentals(symbol, quote, metrics, ratios, consensus, income)
+    if surprises:
+        context += "Beat/miss history:\n" + "\n".join(
+            f"  {s.get('date','')}: EPS actual {s.get('actualEarningResult','N/A')} vs est {s.get('estimatedEarning','N/A')}"
+            for s in surprises
+        ) + "\n"
+    if news:
+        context += "Recent news:\n" + "\n".join(f"  - {n.get('title','')}" for n in news[:5]) + "\n"
+
+    search = web_search(f"{symbol} earnings results beat miss quarterly {datetime.now().strftime('%B %Y')}")
+    if search:
+        context += f"\nEarnings results web data:\n{search}"
+
+    prompt = (
+        f"Post-earnings analysis for ${symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+        f"Lead with a clear verdict: BEAT / IN-LINE / MISS on what matters most.\n"
+        f"1. Beat/miss scorecard: revenue, EPS, margins, guidance — actual vs. consensus, delta %\n"
+        f"2. Why results differed from expectations — what drove the beat or miss\n"
+        f"3. Thesis impact: does this strengthen, weaken, or leave intact the long-term thesis?\n"
+        f"4. Estimate revisions: what forward numbers change and why\n"
+        f"5. Key management commentary: 2-3 signals from the call that matter for positioning\n"
+        f"6. Bull case: why the quarter is better than it looks\n"
+        f"7. Bear case: why the market may punish this\n"
+        f"8. Action: Upgrade / Maintain / Downgrade + near-term price target\n"
+        f"Keep under 3800 characters. Be opinionated — have a view."
+    )
+    skill_prompt = get_skill_prompt("/ea")
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt, thinking_budget=16000)
+    send_message(chat_id, f"<b>{symbol} EARNINGS ANALYSIS</b>\n<i>Source: FMP + Web | Post-Earnings Update</i>\n\n" + response)
+
+
+def handle_catalyst(chat_id, symbol):
+    if not symbol:
+        send_message(chat_id, "❌ Usage: /catalyst TICKER\nExample: /catalyst AAPL")
+        return
+    symbol = symbol.strip().upper()
+    if not _valid_ticker(symbol):
+        send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>.")
+        return
+    send_message(chat_id, f"Building catalyst calendar for {symbol}...")
+    quote     = get_stock_quote(symbol)
+    surprises = get_earnings_surprises(symbol)
+    news      = get_ticker_news(symbol, limit=8)
+
+    context = f"{symbol} — Catalyst Calendar | Today: {datetime.now().strftime('%B %d, %Y')}\n"
+    if quote and "_error" not in quote:
+        context += f"Price: ${quote.get('price','N/A')} | 52wk ${quote.get('yearLow','N/A')}–${quote.get('yearHigh','N/A')}\n"
+    if surprises:
+        context += "Recent earnings dates:\n" + "\n".join(
+            f"  {s.get('date','')}: EPS {s.get('actualEarningResult','N/A')} vs est {s.get('estimatedEarning','N/A')}"
+            for s in surprises
+        ) + "\n"
+    if news:
+        context += "Recent news:\n" + "\n".join(f"  - {n.get('title','')}" for n in news) + "\n"
+
+    search = web_search(f"{symbol} earnings date upcoming catalyst investor day conference product launch {datetime.now().strftime('%B %Y')}")
+    if search:
+        context += f"\nCatalyst web data:\n{search}"
+
+    prompt = (
+        f"Catalyst calendar for ${symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+        f"Identify all upcoming catalysts over the next 3-6 months:\n"
+        f"1. Next earnings: date, time, key metrics to watch, consensus estimates\n"
+        f"2. Corporate events: investor days, capital markets days, product launches, shareholder meetings\n"
+        f"3. Regulatory/legal: FDA decisions, regulatory rulings, contract renewals, litigation milestones\n"
+        f"4. Industry events: major conferences, industry data releases affecting this name\n"
+        f"5. M&A/strategic: potential deal news, partnerships, spin-offs\n"
+        f"6. Macro triggers: Fed meetings, economic data that specifically impact this stock\n"
+        f"For each catalyst: date, what could happen, BULL outcome, BEAR outcome, impact level (HIGH/MED/LOW)\n"
+        f"End with: which catalyst is the biggest near-term mover and any binary risk needing hedging.\n"
+        f"Keep under 3800 characters."
+    )
+    skill_prompt = get_skill_prompt("/catalyst")
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt, thinking_budget=10000)
+    send_message(chat_id, f"<b>{symbol} CATALYST CALENDAR</b>\n<i>Source: FMP + Web | Next 3-6 Months</i>\n\n" + response)
+
+
+def handle_ue(chat_id, symbol):
+    if not symbol:
+        send_message(chat_id, "❌ Usage: /ue TICKER\nExample: /ue NOW")
+        return
+    symbol = symbol.strip().upper()
+    if not _valid_ticker(symbol):
+        send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>.")
+        return
+    send_message(chat_id, f"Analyzing unit economics for {symbol}...")
+    quote   = get_stock_quote(symbol)
+    metrics = get_key_metrics(symbol)
+    ratios  = get_financial_ratios(symbol)
+    income  = get_income_statement(symbol)
+
+    context = f"{symbol} — Unit Economics | Today: {datetime.now().strftime('%B %d, %Y')}\n"
+    context += _fmt_fundamentals(symbol, quote, metrics, ratios, None, income)
+
+    search = web_search(f"{symbol} ARR net retention Rule of 40 LTV CAC unit economics SaaS metrics {datetime.now().strftime('%B %Y')}")
+    if search:
+        context += f"\nUnit economics web data:\n{search}"
+
+    prompt = (
+        f"Unit economics and revenue quality analysis for ${symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+        f"1. Business model: subscription/SaaS, transaction, recurring services, or hybrid?\n"
+        f"2. Revenue quality scorecard: recurring %, customer concentration, growth trajectory, predictability\n"
+        f"3. Key metrics (from data + web): ARR/ARR growth, Net Dollar Retention, gross retention, CAC payback, LTV:CAC\n"
+        f"4. Rule of 40: revenue growth % + FCF margin % — score and benchmark\n"
+        f"5. SaaS Magic Number: net new ARR / prior S&M — efficient or inefficient growth engine?\n"
+        f"6. Margin waterfall: Revenue → Gross Profit → EBITDA — where is the bottleneck?\n"
+        f"7. Benchmarking: compare each metric to SaaS/sector best-in-class standards\n"
+        f"8. Red flags: NDR declining, CAC rising, gross margin compressing, churn accelerating?\n"
+        f"9. Bull case: unit economics improving, what multiple re-rating looks like\n"
+        f"10. Bear case: unit economics deteriorating, multiple compression scenario\n"
+        f"Keep under 3800 characters. Use exact numbers from data — no vague ranges."
+    )
+    skill_prompt = get_skill_prompt("/ue")
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt, thinking_budget=16000)
+    send_message(chat_id, f"<b>{symbol} UNIT ECONOMICS</b>\n<i>Source: FMP + Web | Revenue Quality Analysis</i>\n\n" + response)
+
+
+def handle_memo(chat_id, symbol):
+    if not symbol:
+        send_message(chat_id, "❌ Usage: /memo TICKER\nExample: /memo GOOGL")
+        return
+    symbol = symbol.strip().upper()
+    if not _valid_ticker(symbol):
+        send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>.")
+        return
+    send_message(chat_id, f"Writing investment committee memo for {symbol}...")
+    quote     = get_stock_quote(symbol)
+    metrics   = get_key_metrics(symbol)
+    ratios    = get_financial_ratios(symbol)
+    income    = get_income_statement(symbol)
+    consensus = get_analyst_consensus(symbol)
+    surprises = get_earnings_surprises(symbol)
+    cashflow  = get_cash_flow_statement(symbol)
+    news      = get_ticker_news(symbol, limit=5)
+
+    context = f"{symbol} — IC Memo | Today: {datetime.now().strftime('%B %d, %Y')}\n"
+    context += _fmt_fundamentals(symbol, quote, metrics, ratios, consensus, income)
+    if cashflow and isinstance(cashflow, list):
+        for cf in cashflow[:2]:
+            yr    = cf.get("calendarYear", cf.get("date", "N/A"))
+            ocf   = cf.get("operatingCashFlow", "N/A")
+            capex = cf.get("capitalExpenditure", "N/A")
+            context += f"CF {yr}: Operating CF {ocf} | CapEx {capex}\n"
+    if surprises:
+        context += "Earnings history:\n" + "\n".join(
+            f"  {s.get('date','')}: EPS {s.get('actualEarningResult','N/A')} vs {s.get('estimatedEarning','N/A')}"
+            for s in surprises
+        ) + "\n"
+    if news:
+        context += "Recent news:\n" + "\n".join(f"  - {n.get('title','')}" for n in news) + "\n"
+
+    search = web_search(f"{symbol} investment thesis catalyst risk analysis {datetime.now().strftime('%B %Y')}")
+    if search:
+        context += f"\nWeb data:\n{search}"
+
+    prompt = (
+        f"Investment committee memo for ${symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+        f"Write a formal IC-style memo with clear recommendation:\n"
+        f"1. Executive summary: company, recommendation (Long/Short/Pass), headline return target, top 3 risks\n"
+        f"2. Investment thesis: core thesis + 3-5 supporting pillars with evidence from data\n"
+        f"3. Financial analysis: revenue, margins, FCF, balance sheet quality — from the live data\n"
+        f"4. Valuation: current multiples vs. peers and history — what are you paying?\n"
+        f"5. Value creation levers: organic growth, margin expansion, multiple re-rating, M&A\n"
+        f"6. Returns: bull case target + IRR, base case target + IRR, bear case + max loss\n"
+        f"7. Key risks: top 5 ranked by severity with specific mitigants\n"
+        f"8. Catalysts: next 3 events that prove or disprove the thesis\n"
+        f"9. Recommendation: Long/Short/Pass, conviction HIGH/MEDIUM/LOW, entry, stop loss, position size\n"
+        f"Keep under 3800 characters. Be direct — state the recommendation clearly."
+    )
+    skill_prompt = get_skill_prompt("/memo")
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt, thinking_budget=16000)
+    send_message(chat_id, f"<b>{symbol} IC MEMO</b>\n<i>Source: FMP + Web | Investment Committee Format</i>\n\n" + response)
+
+
+def handle_merger(chat_id, ticker1, ticker2):
+    if not ticker1:
+        send_message(chat_id, "❌ Usage: /merger ACQUIRER TARGET\nExample: /merger MSFT ATVI")
+        return
+    t1 = ticker1.strip().upper()
+    t2 = ticker2.strip().upper() if ticker2 else ""
+    if not _valid_ticker(t1):
+        send_message(chat_id, f"❌ Invalid ticker: <b>{t1}</b>.")
+        return
+    if t2 and not _valid_ticker(t2):
+        send_message(chat_id, f"❌ Invalid ticker: <b>{t2}</b>.")
+        return
+
+    label = f"{t1} × {t2}" if t2 else t1
+    send_message(chat_id, f"Building M&A merger model for {label}...")
+
+    q1 = get_stock_quote(t1)
+    m1 = get_key_metrics(t1)
+    i1 = get_income_statement(t1)
+    cf1 = get_cash_flow_statement(t1)
+
+    context = f"M&A Merger Model | Today: {datetime.now().strftime('%B %d, %Y')}\n"
+    context += f"\n=== ACQUIRER: {t1} ===\n"
+    context += _fmt_fundamentals(t1, q1, m1, None, None, i1)
+    if cf1 and isinstance(cf1, list) and cf1:
+        cf = cf1[0]
+        context += f"Operating CF: {cf.get('operatingCashFlow','N/A')} | CapEx: {cf.get('capitalExpenditure','N/A')} | Debt: {cf.get('debtRepayment','N/A')}\n"
+
+    if t2:
+        q2 = get_stock_quote(t2)
+        m2 = get_key_metrics(t2)
+        i2 = get_income_statement(t2)
+        context += f"\n=== TARGET: {t2} ===\n"
+        context += _fmt_fundamentals(t2, q2, m2, None, None, i2)
+
+    search = web_search(f"{t1} {t2} merger acquisition deal synergies M&A {datetime.now().strftime('%B %Y')}")
+    if search:
+        context += f"\nM&A web data:\n{search}"
+
+    target_section = f"and target {t2}" if t2 else "(assume a hypothetical target in the same sector)"
+    prompt = (
+        f"M&A accretion/dilution model: acquirer {t1} {target_section}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
+        f"Use the live financial data provided.\n"
+        f"1. Deal overview: implied offer premium (assume 25-35% if no deal announced), deal value, consideration mix\n"
+        f"2. Purchase price: implied EV/Revenue, EV/EBITDA, P/E vs. current trading multiples\n"
+        f"3. Sources & uses: how is the deal financed (cash, new debt, stock)?\n"
+        f"4. Pro forma EPS: Year 1 and Year 2 accretion/(dilution) — show the build\n"
+        f"   Include: target income, synergies (phased in), new interest, intangible amortization\n"
+        f"5. Synergies: cost savings (headcount, overlap) and revenue upside — be realistic\n"
+        f"6. Breakeven: minimum synergies for EPS-neutral in Year 1\n"
+        f"7. Sensitivity table: accretion/dilution vs. premium paid (15-35%) and synergy level\n"
+        f"8. Strategic rationale: why this deal makes sense OR doesn't\n"
+        f"9. Bull case: deal creates significant value\n"
+        f"10. Bear case: deal destroys value (overpaid, integration fails)\n"
+        f"Keep under 3800 characters. Show the key math explicitly."
+    )
+    skill_prompt = get_skill_prompt("/merger")
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt, thinking_budget=16000)
+    send_message(chat_id, f"<b>{label} MERGER MODEL</b>\n<i>Source: FMP + Web | Accretion/Dilution Analysis</i>\n\n" + response)
+
+
 # ─────────────────────────────────────
 # STARFIRE TELEGRAM TICKET PARSER
 # ─────────────────────────────────────
@@ -2677,6 +2945,156 @@ def _execute_telegram_ticket(chat_id, ticket):
     send_message(chat_id, f"Ticket {num_str} COMPLETE. Report delivered.")
     _ticket_status[tid] = "DONE"
     _pending_telegram_tickets.pop(chat_id, None)
+
+
+# ─────────────────────────────────────
+# NATURAL LANGUAGE INTENT DETECTION
+# Routes conversational messages to specialized handlers when intent is clear.
+# Falls through to ask_claude for everything else.
+# ─────────────────────────────────────
+def _intent_route(chat_id, text_low, ticker):
+    """
+    Returns True if a specialized handler was dispatched, False to fall through.
+    Matches natural language intent against known analysis patterns.
+    """
+    t = text_low
+
+    # ── DCF / intrinsic value ──────────────────────────────────────────
+    if ticker and any(k in t for k in [
+        "dcf", "intrinsic value", "discounted cash flow", "what is it worth",
+        "what's it worth", "fair value model", "intrinsic price",
+    ]):
+        handle_dcf(chat_id, ticker)
+        return True
+
+    # ── Comps / peer multiples ─────────────────────────────────────────
+    if ticker and any(k in t for k in [
+        "comps", "comparable", "peer multiple", "peer valuation",
+        "how does it compare to peers", "valued vs peers", "peer analysis",
+        "peers trade", "multiple vs peers",
+    ]):
+        handle_comps(chat_id, ticker)
+        return True
+
+    # ── Investment thesis ──────────────────────────────────────────────
+    if ticker and any(k in t for k in [
+        "investment thesis", "thesis for", "thesis on", "why own", "make a case",
+        "bull case for", "conviction on", "still a buy", "thesis still intact",
+        "build a thesis", "long thesis", "short thesis",
+    ]):
+        handle_thesis(chat_id, ticker)
+        return True
+
+    # ── Earnings preview (pre-earnings) ───────────────────────────────
+    if ticker and any(k in t for k in [
+        "earnings preview", "pre-earnings", "earnings setup", "what to watch",
+        "before earnings", "earnings coming", "earnings trade", "preview earnings",
+        "earnings play", "pre earnings",
+    ]):
+        handle_ep(chat_id, ticker)
+        return True
+
+    # ── Stock screen / idea generation ────────────────────────────────
+    if any(k in t for k in [
+        "stock screen", "find ideas", "screen for", "pitch me", "find me stocks",
+        "what looks interesting", "new ideas", "stock ideas", "give me ideas",
+        "find me ideas", "best value stocks", "best growth stocks",
+    ]):
+        style = "growth"
+        for s in ["value", "growth", "quality", "short", "special"]:
+            if s in t:
+                style = s
+                break
+        else:
+            # Check for thematic keywords — use the raw query as the theme
+            for theme_kw in ["ai", "tech", "energy", "biotech", "fintech", "ev", "defense", "cyber"]:
+                if theme_kw in t:
+                    style = theme_kw
+                    break
+        handle_screen(chat_id, style)
+        return True
+
+    # ── Technical analysis / trade setup ──────────────────────────────
+    if ticker and any(k in t for k in [
+        "technical analysis", "chart analysis", "trade setup", "good entry",
+        "should i buy", "should i sell", "support level", "resistance level",
+        "breakout setup", "ta on", "chart on", "moving average",
+        "overbought", "oversold", "momentum setup",
+    ]):
+        handle_ta(chat_id, ticker)
+        return True
+
+    # ── Options ───────────────────────────────────────────────────────
+    if ticker and any(k in t for k in [
+        "options strategy", "options play", "call or put", "options on",
+        "what options", "best options", "options setup", "options trade",
+        "calls or puts", "implied volatility",
+    ]):
+        handle_options(chat_id, ticker)
+        return True
+
+    # ── Full deep dive ─────────────────────────────────────────────────
+    if ticker and any(k in t for k in [
+        "full analysis", "deep dive", "deep analysis", "tell me everything",
+        "complete analysis", "full breakdown", "analyze ", "full report on",
+    ]):
+        handle_full(chat_id, ticker)
+        return True
+
+    # ── Long-term investing ────────────────────────────────────────────
+    if ticker and any(k in t for k in [
+        "long term", "long-term", "hold for years", "worth holding",
+        "invest in", "dca into", "buy and hold", "5 year", "10 year",
+    ]):
+        handle_invest(chat_id, ticker)
+        return True
+
+    # ── Post-earnings analysis ─────────────────────────────────────────
+    if ticker and any(k in t for k in [
+        "earnings results", "how did they do", "beat or miss", "quarterly results",
+        "earnings update", "how were earnings", "post earnings", "after earnings",
+        "earnings reaction", "earnings report", "reported earnings",
+    ]):
+        handle_ea(chat_id, ticker)
+        return True
+
+    # ── Catalyst calendar ─────────────────────────────────────────────
+    if ticker and any(k in t for k in [
+        "upcoming catalysts", "catalyst calendar", "what's coming up",
+        "upcoming events", "next catalyst", "event calendar", "next earnings date",
+        "when do they report", "upcoming for",
+    ]):
+        handle_catalyst(chat_id, ticker)
+        return True
+
+    # ── Unit economics ────────────────────────────────────────────────
+    if ticker and any(k in t for k in [
+        "unit economics", "ltv cac", "net retention", "rule of 40",
+        "saas metrics", "arr growth", "net dollar retention", "revenue quality",
+        "customer economics", "cohort analysis", "cac payback",
+    ]):
+        handle_ue(chat_id, ticker)
+        return True
+
+    # ── IC memo ───────────────────────────────────────────────────────
+    if ticker and any(k in t for k in [
+        "investment memo", "ic memo", "write up a position", "investment case",
+        "formal recommendation", "position write-up", "investment committee",
+        "make a formal case", "write up",
+    ]):
+        handle_memo(chat_id, ticker)
+        return True
+
+    # ── Merger / M&A model ────────────────────────────────────────────
+    if any(k in t for k in [
+        "merger model", "accretion dilution", "pro forma eps", "m&a model",
+        "merger consequences", "if they acquired", "if they bought",
+        "acquisition model", "deal impact",
+    ]):
+        handle_merger(chat_id, ticker, "")
+        return True
+
+    return False
 
 
 # ─────────────────────────────────────
@@ -2754,6 +3172,11 @@ def process_command(chat_id, text):
         "/thesis":      lambda: handle_thesis(chat_id, argument),
         "/ep":          lambda: handle_ep(chat_id, argument),
         "/screen":      lambda: handle_screen(chat_id, rest),
+        "/ea":          lambda: handle_ea(chat_id, argument),
+        "/catalyst":    lambda: handle_catalyst(chat_id, argument),
+        "/ue":          lambda: handle_ue(chat_id, argument),
+        "/memo":        lambda: handle_memo(chat_id, argument),
+        "/merger":      lambda: handle_merger(chat_id, argument, argument2),
     }
 
     handler = routes.get(command)
@@ -2764,13 +3187,20 @@ def process_command(chat_id, text):
     else:
         # Full conversational mode — use history + live data + web search
         log.info(f"Conversational message from chat {chat_id}: {text!r}")
-        history = _history_get(chat_id)
-        context = f"Today: {datetime.now().strftime('%B %d, %Y %I:%M %p ET')}"
 
-        # Inject live prices + FMP fundamentals when tickers are detected
+        # ── Intent detection: route to specialized handlers when possible ──
         text_upper = text.upper()
         tickers_found = re.findall(r'\b[A-Z]{2,5}\b', text_upper)
         ticker_candidates = [t for t in tickers_found if t not in _SKIP_WORDS and len(t) >= 2]
+        primary_ticker = ticker_candidates[0] if ticker_candidates else ""
+
+        if _intent_route(chat_id, text.lower(), primary_ticker):
+            log.info(f"Intent-routed message from chat {chat_id} → ticker={primary_ticker}")
+            return
+
+        # ── General conversation ──────────────────────────────────────────
+        history = _history_get(chat_id)
+        context = f"Today: {datetime.now().strftime('%B %d, %Y %I:%M %p ET')}"
 
         market_keywords = ["MARKET", "SPY", "QQQ", "NASDAQ", "S&P", "DOW", "STOCK", "PRICE", "CRYPTO", "BITCOIN", "BTC"]
         if any(w in text_upper for w in WATCHLIST + market_keywords):
@@ -2779,7 +3209,6 @@ def process_command(chat_id, text):
                 if quote and "_error" not in quote:
                     context += f"\n{symbol}: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%)"
         elif ticker_candidates:
-            # Pull rich FMP data for the first detected ticker
             primary = ticker_candidates[0]
             quote   = get_stock_quote(primary)
             metrics = get_key_metrics(primary)
@@ -2787,7 +3216,6 @@ def process_command(chat_id, text):
             if fdata:
                 context += f"\n{fdata}"
 
-        # Web search enrichment
         search_query = None
         if any(w in text_upper for w in ["NEWS", "LATEST", "TODAY", "HAPPENED", "RECENT"]):
             search_query = f"{text} {datetime.now().strftime('%B %Y')}"
