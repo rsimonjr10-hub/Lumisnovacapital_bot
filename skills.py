@@ -1009,9 +1009,13 @@ COMMAND_MAP = {
 # PUBLIC API
 # ─────────────────────────────────────
 _NO_DISCLAIMER = """
+PRICE RULE — NON-NEGOTIABLE:
+- Your VERY FIRST sentence must state the current price: "[TICKER] is trading at $X.XX (+X.XX% today)"
+- Use the EXACT price from the LIVE MARKET DATA block — never approximate, never say "around" or "approximately"
+- This applies to every single stock-specific response — no exceptions
+
 LIVE DATA RULES:
 - The LIVE MARKET DATA block at the top of the user message contains real-time prices fetched right now — treat every number in it as current fact
-- ALWAYS cite the live price from that block when referencing the stock price (e.g. "trading at $138.50")
 - NEVER substitute a price from your training data — if a live price is provided, use it exactly
 - If no live price was provided, state the last known price range from your training and note it may be outdated
 
