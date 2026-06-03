@@ -592,7 +592,17 @@ def get_income_statement(symbol, period="annual"):
 
 
 def get_cash_flow_statement(symbol, period="annual"):
-    return _fmp_get("cash-flow-statement", {"symbol": symbol, "period": period, "limit": 3}, f"cashflow/{symbol}")
+    url = f"{_FMP_BASE}/cash-flow-statement"
+    try:
+        r = requests.get(url, params={"apikey": FMP_API_KEY, "symbol": symbol, "period": period, "limit": 3}, timeout=10)
+        if r.status_code != 200:
+            log.warning(f"FMP cash-flow-statement returned {r.status_code} for {symbol}")
+            return None
+        data = r.json()
+        return data[:3] if isinstance(data, list) and data else None
+    except Exception as e:
+        log.error(f"FMP cashflow/{symbol} error: {e}")
+        return None
 
 
 def get_earnings_surprises(symbol):
