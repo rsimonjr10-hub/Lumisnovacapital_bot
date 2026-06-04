@@ -14,6 +14,7 @@ import signal
 import time
 import logging
 import threading
+from collections import defaultdict, deque
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
 import zoneinfo
@@ -103,6 +104,223 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 log = logging.getLogger(__name__)
+
+# ─────────────────────────────────────
+# SELF-HEAL ENGINE
+# Tracks API/component failures and auto-flags degraded components.
+# Notifies the owner when a component hits 3+ errors in 5 minutes.
+# Components auto-recover when errors clear.
+# ─────────────────────────────────────
+_error_tracker: defaultdict = defaultdict(lambda: deque(maxlen=20))
+_fallback_flags: dict = {}   # component → bool (True = degraded/fallback)
+_heal_log: deque = deque(maxlen=200)
+
+def _record_error(component: str, error, ctx: str = "") -> None:
+    """Record a component error; auto-flag fallback mode at 3 errors/5 min."""
+    now = time.time()
+    _error_tracker[component].append({"ts": now, "err": str(error)[:300], "ctx": ctx})
+    _heal_log.append(f"{datetime.now().strftime('%H:%M')} [{component}] {str(error)[:100]}")
+    recent = [e for e in _error_tracker[component] if now - e["ts"] < 300]
+    if len(recent) >= 3 and not _fallback_flags.get(component):
+        _fallback_flags[component] = True
+        log.warning(f"Self-heal: {component} flagged ({len(recent)} errors/5min)")
+        if CHAT_ID:
+            try:
+                send_message(CHAT_ID,
+                    f"⚠️ <b>SELF-HEAL ALERT</b>\n"
+                    f"Component: <code>{component}</code> — {len(recent)} errors in 5 min\n"
+                    f"<code>{str(error)[:200]}</code>\n"
+                    f"Fallback mode active — degraded responses may occur."
+                )
+            except Exception:
+                pass
+
+def _clear_error(component: str) -> None:
+    """Mark a component healthy after a successful call during fallback."""
+    if _fallback_flags.get(component):
+        _fallback_flags[component] = False
+        log.info(f"Self-heal: {component} recovered")
+        _heal_log.append(f"{datetime.now().strftime('%H:%M')} [{component}] RECOVERED")
+
+def _is_healthy(component: str) -> bool:
+    return not _fallback_flags.get(component, False)
+
+
+# ─────────────────────────────────────
+# MARKET BRAIN — continuous data absorption
+# Background thread absorbs live market data every 5 minutes
+# and every 30 minutes pulls deeper sector/macro data.
+# get_brain_context() injects the accumulated knowledge into prompts.
+# ─────────────────────────────────────
+_brain: dict = {}                      # symbol → live quote snapshot
+_brain_news: deque = deque(maxlen=60)  # rolling market news headlines
+_brain_earnings: dict = {}             # symbol → upcoming earnings
+_brain_sectors: dict = {}             # sector → change %
+_brain_macro: dict = {}               # indicator → value
+_brain_lock = threading.Lock()
+_brain_last_deep: float = 0.0
+
+def _brain_absorb_prices() -> None:
+    for sym in WATCHLIST:
+        try:
+            q = get_stock_quote(sym)
+            if q and "_error" not in q:
+                with _brain_lock:
+                    prev_price = _brain.get(sym, {}).get("price")
+                    _brain[sym] = {
+                        "price":        q.get("price"),
+                        "change_pct":   q.get("changePercentage", 0),
+                        "volume":       q.get("volume"),
+                        "avg_volume":   q.get("avgVolume"),
+                        "day_high":     q.get("dayHigh"),
+                        "day_low":      q.get("dayLow"),
+                        "year_high":    q.get("yearHigh"),
+                        "year_low":     q.get("yearLow"),
+                        "prev_price":   prev_price,
+                        "refreshed_at": datetime.now().strftime("%H:%M"),
+                    }
+                _clear_error("fmp")
+        except Exception as e:
+            _record_error("fmp", e, ctx=f"brain/{sym}")
+
+def _brain_absorb_news() -> None:
+    try:
+        items = get_stock_news()
+        if items and isinstance(items, list):
+            seen = {n["title"] for n in _brain_news}
+            for item in items[:10]:
+                title = item.get("title", "")
+                if title and title not in seen:
+                    with _brain_lock:
+                        _brain_news.appendleft({
+                            "title":  title,
+                            "ticker": item.get("symbol", ""),
+                            "at":     datetime.now().strftime("%H:%M"),
+                        })
+        _clear_error("fmp_news")
+    except Exception as e:
+        _record_error("fmp_news", e)
+
+def _brain_absorb_earnings() -> None:
+    try:
+        cal = get_earnings_calendar()
+        if cal and isinstance(cal, list):
+            fresh = {}
+            for entry in cal:
+                sym = entry.get("symbol", "")
+                if sym in WATCHLIST or sym in _brain:
+                    fresh[sym] = {
+                        "date":    entry.get("date"),
+                        "eps_est": entry.get("epsEstimated"),
+                        "rev_est": entry.get("revenueEstimated"),
+                    }
+            with _brain_lock:
+                _brain_earnings.update(fresh)
+    except Exception as e:
+        _record_error("earnings_cal", e)
+
+def _brain_absorb_deep() -> None:
+    """Heavier pulls — sector perf + macro indicators. Runs every 30 min."""
+    try:
+        sectors = get_sector_performance()
+        if sectors and isinstance(sectors, list):
+            with _brain_lock:
+                _brain_sectors.update({
+                    s.get("sector", "?"): s.get("changesPercentage", 0)
+                    for s in sectors[:11]
+                })
+        _clear_error("fmp_sectors")
+    except Exception as e:
+        _record_error("fmp_sectors", e)
+    try:
+        macro = get_economic_indicators()
+        if macro and isinstance(macro, list):
+            with _brain_lock:
+                _brain_macro.update({
+                    m.get("name", "?"): m.get("value") for m in macro[:10]
+                })
+    except Exception as e:
+        _record_error("fmp_macro", e)
+
+def _brain_loop() -> None:
+    """Daemon thread: absorb market data continuously."""
+    global _brain_last_deep
+    log.info("Market Brain: absorption loop started")
+    time.sleep(12)   # let bot finish startup before first hit
+    while not _shutdown:
+        try:
+            _brain_absorb_prices()
+            _brain_absorb_news()
+            _brain_absorb_earnings()
+            now = time.time()
+            if now - _brain_last_deep > 1800:
+                _brain_absorb_deep()
+                _brain_last_deep = now
+        except Exception as e:
+            log.error(f"Brain loop error: {e}")
+        # 5-minute sleep, checking shutdown each second
+        for _ in range(300):
+            if _shutdown:
+                break
+            time.sleep(1)
+    log.info("Market Brain: absorption loop stopped")
+
+def get_brain_context() -> str:
+    """
+    Return a compact market-awareness string for injection into prompts.
+    Gives the model a live picture of prices, news, and calendar without
+    an extra API call.
+    """
+    with _brain_lock:
+        if not _brain:
+            return ""
+        lines = [f"=== MARKET BRAIN — {datetime.now().strftime('%b %d %H:%M ET')} ==="]
+
+        # Watchlist prices
+        price_parts = []
+        for sym in WATCHLIST:
+            d = _brain.get(sym)
+            if d and d.get("price") is not None:
+                chg = d.get("change_pct") or 0
+                price_parts.append(f"{sym} ${d['price']} ({chg:+.2f}%)")
+        if price_parts:
+            lines.append("Watchlist: " + " | ".join(price_parts))
+
+        # Top movers by absolute change
+        movers = sorted(
+            [(s, d) for s, d in _brain.items() if d.get("change_pct") is not None],
+            key=lambda x: abs(x[1].get("change_pct") or 0), reverse=True
+        )[:3]
+        if movers:
+            lines.append("Top movers: " + " | ".join(
+                f"{s} {d.get('change_pct', 0):+.1f}%" for s, d in movers
+            ))
+
+        # Recent news (last 5)
+        if _brain_news:
+            lines.append("Recent news:")
+            for n in list(_brain_news)[:5]:
+                tag = f"[{n['ticker']}] " if n.get("ticker") else ""
+                lines.append(f"  {n['at']} {tag}{n['title']}")
+
+        # Upcoming earnings
+        if _brain_earnings:
+            upcoming = sorted(_brain_earnings.items(), key=lambda x: x[1].get("date") or "")[:3]
+            lines.append("Earnings soon: " + " | ".join(
+                f"{s} {d.get('date','?')}" for s, d in upcoming
+            ))
+
+        # Leading/lagging sectors
+        if _brain_sectors:
+            top = max(_brain_sectors, key=lambda k: _brain_sectors[k] or 0)
+            bot = min(_brain_sectors, key=lambda k: _brain_sectors[k] or 0)
+            lines.append(
+                f"Sectors: {top} leading ({(_brain_sectors[top] or 0):+.2f}%) "
+                f"| {bot} lagging ({(_brain_sectors[bot] or 0):+.2f}%)"
+            )
+
+        return "\n".join(lines)
+
 
 # ─────────────────────────────────────
 # PER-CHAT CONVERSATION MEMORY
@@ -569,13 +787,19 @@ def _fmp_get(endpoint, params=None, label="", list_index=0):
         r = requests.get(url, params=p, timeout=10)
         if r.status_code != 200:
             log.warning(f"FMP {endpoint} returned {r.status_code}")
+            _record_error("fmp", f"HTTP {r.status_code}", ctx=endpoint)
             return None
         data = r.json()
         if isinstance(data, list):
-            return data[list_index] if len(data) > list_index else None
-        return data if data else None
+            result = data[list_index] if len(data) > list_index else None
+        else:
+            result = data if data else None
+        if result:
+            _clear_error("fmp")
+        return result
     except Exception as e:
         log.error(f"FMP {label or endpoint} error: {e}")
+        _record_error("fmp", e, ctx=label or endpoint)
         return None
 
 
@@ -822,17 +1046,21 @@ def web_search(query, num_results=5):
                 snippet = item.get("snippet", "")
                 if title or snippet:
                     snippets.append(f"{title}: {snippet}")
-            # Also include answer box if present
             if data.get("answerBox"):
                 ab = data["answerBox"]
                 answer = ab.get("answer") or ab.get("snippet") or ""
                 if answer:
                     snippets.insert(0, f"[Top Result] {answer}")
-            return "\n".join(snippets) if snippets else None
+            result = "\n".join(snippets) if snippets else None
+            if result:
+                _clear_error("web")
+            return result
         log.warning(f"Serper search returned {r.status_code} for query: {query!r}")
+        _record_error("web", f"HTTP {r.status_code}", ctx=query[:80])
         return None
     except Exception as e:
         log.error(f"Web search error: {e}")
+        _record_error("web", e, ctx=query[:80])
         return None
 
 
@@ -942,6 +1170,7 @@ def ask_claude(prompt, context="", skill_prompt=None, history=None, max_tokens=1
             response = requests.post(url, headers=headers, json=payload, timeout=60)
         if response.status_code != 200:
             log.error(f"Anthropic API returned {response.status_code}: {response.text}")
+            _record_error("claude", f"HTTP {response.status_code}")
             if response.status_code == 401:
                 return "⚠️ Lumis Nova: API key invalid or expired. Contact admin."
             if response.status_code == 429:
@@ -949,23 +1178,27 @@ def ask_claude(prompt, context="", skill_prompt=None, history=None, max_tokens=1
             return "⚠️ Lumis Nova is temporarily unavailable. Try again in a moment."
         data = response.json()
         if "content" in data and len(data["content"]) > 0:
+            _clear_error("claude")
             return data["content"][0]["text"]
         log.error(f"Anthropic API returned unexpected payload: {data}")
         return "⚠️ Unable to get response from Lumis Nova. Try again shortly."
     except requests.exceptions.Timeout:
         log.error("Claude API timeout — retrying with reduced tokens")
+        _record_error("claude", "timeout")
         try:
             payload["max_tokens"] = 600
             response = requests.post(url, headers=headers, json=payload, timeout=60)
             if response.status_code == 200:
                 data = response.json()
                 if "content" in data and len(data["content"]) > 0:
+                    _clear_error("claude")
                     return data["content"][0]["text"]
         except Exception as retry_err:
             log.error(f"Claude API retry failed: {retry_err}")
         return "⚠️ Lumis Nova timed out. The request took too long — please try again."
     except Exception as e:
         log.error(f"Claude API error: {e}")
+        _record_error("claude", e)
         return "⚠️ Lumis Nova is temporarily unavailable. Try again in a moment."
 
 
@@ -1817,6 +2050,71 @@ def handle_test(chat_id):
     status_line = "✅ All systems operational" if all(r.startswith("✅") for r in results) else "⚠️ One or more issues detected"
     msg = "\n".join(results) + f"\n\n{status_line}\n{datetime.now().strftime('%b %d %Y | %I:%M %p ET')}"
     send_message(chat_id, msg)
+
+
+# ─────────────────────────────────────
+# SELF-HEAL STATUS COMMAND
+# ─────────────────────────────────────
+def handle_heal(chat_id):
+    """Owner command: show self-heal system + market brain status."""
+    if not _is_owner(chat_id):
+        send_message(chat_id, _OWNER_ONLY_MSG)
+        return
+
+    lines = ["<b>SELF-HEAL + MARKET BRAIN STATUS</b>"]
+
+    # Component health
+    flagged = [c for c, v in _fallback_flags.items() if v]
+    if flagged:
+        lines.append(f"⚠️ <b>DEGRADED</b>: {', '.join(flagged)}")
+    else:
+        lines.append("✅ All components nominal")
+
+    # Error counts over the last hour
+    err_summary = []
+    for component, errors in _error_tracker.items():
+        recent = [e for e in errors if time.time() - e["ts"] < 3600]
+        if recent:
+            err_summary.append(f"  • {component}: {len(recent)} error(s) last hour")
+    if err_summary:
+        lines.append("\nError summary (1h):\n" + "\n".join(err_summary))
+
+    # Recent heal log (last 8 entries)
+    if _heal_log:
+        lines.append("\nEvent log:")
+        for entry in list(_heal_log)[-8:]:
+            lines.append(f"  <code>{entry}</code>")
+
+    # Market Brain stats
+    with _brain_lock:
+        bc = len(_brain)
+        nc = len(_brain_news)
+        ec = len(_brain_earnings)
+        sc = len(_brain_sectors)
+        last_sym = next((s for s in WATCHLIST if s in _brain), None)
+        last_refresh = _brain.get(last_sym, {}).get("refreshed_at", "never") if last_sym else "never"
+
+    lines.append(
+        f"\n<b>Market Brain:</b>\n"
+        f"  Symbols tracked: {bc}\n"
+        f"  News buffer: {nc} headlines\n"
+        f"  Earnings watch: {ec} symbols\n"
+        f"  Sector data: {sc} sectors\n"
+        f"  Last price refresh: {last_refresh}"
+    )
+
+    # Brain snapshot (watchlist prices)
+    with _brain_lock:
+        price_snap = []
+        for sym in WATCHLIST:
+            d = _brain.get(sym)
+            if d and d.get("price"):
+                chg = d.get("change_pct") or 0
+                price_snap.append(f"{sym} ${d['price']} ({chg:+.1f}%)")
+    if price_snap:
+        lines.append("\nAbsorbed prices:\n  " + "\n  ".join(price_snap))
+
+    send_message(chat_id, "\n".join(lines))
 
 
 # ─────────────────────────────────────
@@ -2732,6 +3030,7 @@ def process_command(chat_id, text):
         "/portfolio":   lambda: handle_portfolio(chat_id, rest) if _is_owner(chat_id) else send_message(chat_id, _OWNER_ONLY_MSG),
         "/price":       lambda: handle_price(chat_id, argument),
         "/test":        lambda: handle_test(chat_id) if _is_owner(chat_id) else send_message(chat_id, _OWNER_ONLY_MSG),
+        "/heal":        lambda: handle_heal(chat_id),
         "/technical":   lambda: handle_technical(chat_id, argument),
         "/options":     lambda: handle_options(chat_id, argument),
         "/crypto":      lambda: handle_crypto(chat_id, argument),
@@ -2755,13 +3054,31 @@ def process_command(chat_id, text):
     handler = routes.get(command)
     if handler:
         log.info(f"Processing command '{command}' for chat {chat_id}")
-        handler()
+        try:
+            handler()
+        except Exception as _handler_exc:
+            _record_error(f"cmd:{command}", _handler_exc)
+            log.error(f"Handler {command} raised: {_handler_exc}", exc_info=True)
+            # One automatic retry
+            try:
+                handler()
+            except Exception as _retry_exc:
+                _record_error(f"cmd:{command}", _retry_exc, ctx="retry")
+                send_message(chat_id,
+                    f"⚠️ <b>{command}</b> hit an issue (auto-retried).\n"
+                    f"Try again in a moment — our systems are watching."
+                )
         log.info(f"Response sent for command '{command}' to chat {chat_id}")
     else:
-        # Full conversational mode — use history + live data + web search
+        # Full conversational mode — use history + live data + web search + brain
         log.info(f"Conversational message from chat {chat_id}: {text!r}")
         history = _history_get(chat_id)
         context = f"Today: {datetime.now().strftime('%B %d, %Y %I:%M %p ET')}"
+
+        # Always inject market brain awareness
+        brain_ctx = get_brain_context()
+        if brain_ctx:
+            context += f"\n{brain_ctx}"
 
         # Inject live prices + FMP fundamentals when tickers are detected
         text_upper = text.upper()
@@ -2775,7 +3092,6 @@ def process_command(chat_id, text):
                 if quote and "_error" not in quote:
                     context += f"\n{symbol}: ${quote.get('price','N/A')} ({quote.get('changePercentage',0):+.2f}%)"
         elif ticker_candidates:
-            # Pull rich FMP data for the first detected ticker
             primary = ticker_candidates[0]
             quote   = get_stock_quote(primary)
             metrics = get_key_metrics(primary)
@@ -3546,6 +3862,10 @@ def run_bot():
 
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
+
+    # Start continuous market data absorption
+    threading.Thread(target=_brain_loop, daemon=True, name="market-brain").start()
+    log.info("Market Brain thread launched")
 
     missing = []
     if not TELEGRAM_TOKEN:    missing.append("TELEGRAM_TOKEN")
