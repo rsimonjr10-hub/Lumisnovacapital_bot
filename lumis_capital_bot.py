@@ -1285,40 +1285,50 @@ def handle_full(chat_id, symbol):
     if not _valid_ticker(symbol):
         send_message(chat_id, f"❌ Invalid ticker: <b>{symbol}</b>. Use 1–5 uppercase letters (e.g. NVDA, AAPL).")
         return
-    send_message(chat_id, f"Pulling data on {symbol}...")
-    # Fetch all available FMP data in parallel-ish sequence
+    send_message(chat_id, f"Running full analysis on {symbol}...")
     quote     = get_stock_quote(symbol)
     consensus = get_analyst_consensus(symbol)
     metrics   = get_key_metrics(symbol)
     ratios    = get_financial_ratios(symbol)
     income    = get_income_statement(symbol)
     ratings   = get_analyst_ratings(symbol)
-    news      = get_ticker_news(symbol, limit=3)
+    news      = get_ticker_news(symbol, limit=5)
     surprises = get_earnings_surprises(symbol)
 
     context = _fmt_fundamentals(symbol, quote, metrics, ratios, consensus, income)
 
     if ratings:
-        buys = sum(1 for r in ratings if "buy" in str(r.get("analystRatingsStrongBuy", 0) or 0) or r.get("analystRatingsBuy", 0))
-        context += f"\nAnalyst ratings (recent 5): {[r.get('rating','') for r in ratings]}"
+        context += f"\nAnalyst ratings (recent): {[r.get('rating','') for r in ratings[:5]]}"
     if surprises:
-        surp_lines = [f"{s.get('date','')}: EPS actual {s.get('actualEarningResult','N/A')} vs est {s.get('estimatedEarning','N/A')}" for s in surprises]
-        context += f"\nEarnings surprises (last 4):\n" + "\n".join(surp_lines)
+        context += "\nEarnings surprises (last 4):\n" + "\n".join(
+            f"  {s.get('date','')}: actual {s.get('actualEarningResult','N/A')} vs est {s.get('estimatedEarning','N/A')}"
+            for s in surprises
+        )
     if news:
-        context += "\nRecent news:\n" + "\n".join(f"- {n.get('title','')}" for n in news)
+        context += "\nRecent news:\n" + "\n".join(f"  - {n.get('title','')}" for n in news)
 
     search = web_search(f"{symbol} stock analysis outlook {datetime.now().strftime('%B %Y')}")
     if search:
         context += f"\nWeb data:\n{search}"
 
-    prompt = (f"Full institutional-quality analysis for ${symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n"
-              f"Cover: business model, moat, top 3 competitors, key catalysts, "
-              f"valuation vs peers, bull case with price target, bear case with downside, "
-              f"entry strategy, stop loss, position sizing for $10K account.\n"
-              f"Keep the ENTIRE response under 3800 characters so it fits in a single message. Be dense, no filler.")
+    prompt = (
+        f"Full institutional-quality analysis for ${symbol}. Today: {datetime.now().strftime('%B %d, %Y')}\n\n"
+        f"Use the LIVE MARKET DATA above. Cover every section completely — do NOT truncate or skip any section.\n\n"
+        f"1. BUSINESS — what they do, revenue model, competitive position (2-3 sentences)\n"
+        f"2. MOAT — durable advantages: network effects, switching costs, scale, brand (be specific)\n"
+        f"3. COMPETITORS — top 3 rivals with one-line comparison each\n"
+        f"4. FINANCIALS — revenue growth, margins, FCF, key ratios vs peers\n"
+        f"5. EARNINGS — last 4 quarters: beat/miss pattern, most recent surprise %\n"
+        f"6. CATALYSTS — top 3 upcoming catalysts with expected timing\n"
+        f"7. VALUATION — P/E, EV/EBITDA vs peers and historical; cheap/fair/expensive verdict\n"
+        f"8. BULL CASE — specific price target and timeline with 2 key drivers\n"
+        f"9. BEAR CASE — specific downside target with 2 key risks\n"
+        f"10. TRADE — entry zone, stop loss, $10K position sizing using 1-2% risk rule\n\n"
+        f"Be dense and specific. Each section gets 1-3 lines. No filler."
+    )
     skill_prompt = get_skill_prompt("/full")
-    response = ask_claude(prompt, context, skill_prompt=skill_prompt, max_tokens=1100)
-    send_message(chat_id, f"<b>{symbol} ANALYSIS</b>\n<i>Source: FMP + Web</i>\n\n" + response)
+    response = ask_claude_reasoning(prompt, context, skill_prompt=skill_prompt, thinking_budget=16000)
+    send_message(chat_id, f"<b>{symbol} FULL ANALYSIS</b>\n<i>Source: FMP Live + Web | Extended Reasoning</i>\n\n" + response)
 
 
 def handle_opinion(chat_id, symbol):
